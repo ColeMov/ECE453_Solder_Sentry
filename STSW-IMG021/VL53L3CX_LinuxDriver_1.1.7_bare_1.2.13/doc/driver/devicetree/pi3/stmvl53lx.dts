@@ -1,0 +1,23 @@
+/dts-v1/;
+/plugin/;
+
+/ {
+    compatible = "brcm,bcm2708";
+
+    fragment@0 {
+        target = <&i2c1>;
+
+        __overlay__ {
+            #address-cells = <0x1>;
+            #size-cells = <0x0>;
+
+            stmvl53lx: stmvl53lx@29 {
+                compatible = "st,stmvl53lx";
+                reg = <0x29>;
+                xsdn-gpio = <19>;
+                pwren-gpio = <12>;
+                intr-gpio = <16>;
+            };
+        };
+    };
+};
