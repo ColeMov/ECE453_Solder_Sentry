@@ -144,7 +144,7 @@ VFP_SELECT=hardfp
 #
 # NOTE: Includes and defines should use the INCLUDES and DEFINES variable
 # above.
-CFLAGS+=-include stddef.h -include string.h
+CFLAGS+=-include stddef.h -include string.h -Wno-implicit-function-declaration -Wno-incompatible-pointer-types
 
 # Additional / custom C++ compiler flags.
 #

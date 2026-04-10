@@ -4,7 +4,7 @@
  * Description:
  * System configuration
  * This file was automatically generated and should not be modified.
- * Configurator Backend 3.50.0
+ * Configurator Backend 3.20.0
  * device-db 4.34.0.9502
  * mtb-pdl-cat1 3.19.0.44724
  *
@@ -150,34 +150,6 @@ static const cy_stc_pll_manual_config_t srss_0_clock_0_pll_0_pllConfig =
     .lfMode = false,
     .outputMode = CY_SYSCLK_FLLPLL_OUTPUT_AUTO,
 };
-#endif /* (!defined(CY_DEVICE_SECURE)) */
-
-__WEAK void __NO_RETURN cycfg_ClockStartupError(uint32_t error);
-
-#if ((!defined(CY_DEVICE_SECURE)) && (defined(CY_CFG_SYSCLK_FLL_ENABLED)))
-__STATIC_INLINE void Cy_SysClk_FllDeInit(void);
-#endif /* ((!defined(CY_DEVICE_SECURE)) && (defined(CY_CFG_SYSCLK_FLL_ENABLED))) */
-
-#if defined (CY_DEVICE_SECURE)
-void init_cycfg_secure_struct(cy_stc_pra_system_config_t * secure_config);
-#endif /* defined (CY_DEVICE_SECURE) */
-
-#if (!defined(CY_DEVICE_SECURE))
-__STATIC_INLINE void Cy_SysClk_ClkBakInit(void);
-__STATIC_INLINE void Cy_SysClk_ClkFastInit(void);
-__STATIC_INLINE void Cy_SysClk_FllInit(void);
-__STATIC_INLINE void Cy_SysClk_ClkHf0Init(void);
-__STATIC_INLINE void Cy_SysClk_IloInit(void);
-__STATIC_INLINE void Cy_SysClk_ClkLfInit(void);
-__STATIC_INLINE void Cy_SysClk_ClkPath0Init(void);
-__STATIC_INLINE void Cy_SysClk_ClkPath1Init(void);
-__STATIC_INLINE void Cy_SysClk_ClkPath2Init(void);
-__STATIC_INLINE void Cy_SysClk_ClkPath3Init(void);
-__STATIC_INLINE void Cy_SysClk_ClkPath4Init(void);
-__STATIC_INLINE void Cy_SysClk_ClkPeriInit(void);
-__STATIC_INLINE void Cy_SysClk_Pll0Init(void);
-__STATIC_INLINE void Cy_SysClk_ClkSlowInit(void);
-__STATIC_INLINE void Cy_SysClk_WcoInit(void);
 #endif /* (!defined(CY_DEVICE_SECURE)) */
 
 __WEAK void __NO_RETURN cycfg_ClockStartupError(uint32_t error)
@@ -1099,10 +1071,9 @@ void init_cycfg_system(void)
     
     #endif /* (!defined(CY_DEVICE_SECURE)) */
     
-    #if defined(CY_CFG_SYSCLK_ECO_PRESCALER_ENABLED)
+#if defined(CY_CFG_SYSCLK_ECO_PRESCALER_ENABLED)
         Cy_SysClk_EcoPrescalerInit();
-    #endif /* defined (CY_CFG_SYSCLK_ECO_PRESCALER_ENABLED) */
-    
+#endif /* defined(CY_CFG_SYSCLK_ECO_PRESCALER_ENABLED) */
     #ifdef CY_CFG_SYSCLK_CLKALTSYSTICK_ENABLED
         Cy_SysClk_ClkAltSysTickInit();
     #endif

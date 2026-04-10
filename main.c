@@ -11,33 +11,40 @@
 #include "main.h"
 #include "source/app_hw/task_console.h"
 #include "source/app_hw/task_blink.h"
-#include "source/app_hw/task_tof.h"
-#include "source/app_hw/task_captouch.h"
 #include "source/app_hw/task_ble.h"
+#include "source/app_hw/i2c.h"
+#include "source/app_hw/task_ir_sensor.h"
 
 int main(void)
 {
     cy_rslt_t rslt;
 
     /* Initialize the device and board peripherals */
-    rslt = cybsp_init() ;
+    rslt = cybsp_init();
     CY_ASSERT(rslt == CY_RSLT_SUCCESS);
 
     __enable_irq();
 
     task_console_init();
-    task_print_info("FW: BLE debug build active");
+    task_print_info("FW: Solder Sentry BLE build");
+
+    /* I2C must be up before IR sensor task starts */
+    rslt = i2c_init(MODULE_SITE_1);
+    if (rslt == CY_RSLT_SUCCESS)
+    {
+        task_ir_sensor_init();
+    }
+    else
+    {
+        task_print_warning("I2C init failed (0x%08lX) — IR sensor disabled", (unsigned long)rslt);
+    }
 
 #ifdef COMPONENT_BLESS
     task_print_info("FW: COMPONENT_BLESS is ON");
-    task_ble_init();       /* BLE notifications -> phone via Nordic UART Service */
+    task_ble_init();
 #else
     task_print_warning("BLE: COMPONENT_BLESS not enabled in build");
 #endif
-
-    // task_tof_init();  /* ToF distance sensor - uncomment if using VL53Lx */
-
-    task_captouch_init();  /* IQS228B capacitive touch - copper pad */
 
     /* Start the FreeRTOS scheduler */
     vTaskStartScheduler();

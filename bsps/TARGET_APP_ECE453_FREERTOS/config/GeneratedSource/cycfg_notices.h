@@ -5,7 +5,7 @@
  * Contains warnings and errors that occurred while generating code for the
  * design.
  * This file was automatically generated and should not be modified.
- * Configurator Backend 3.50.0
+ * Configurator Backend 3.20.0
  * device-db 4.34.0.9502
  * mtb-pdl-cat1 3.19.0.44724
  *
