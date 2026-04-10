@@ -51,7 +51,6 @@ class IRFrameReceiver:
         self._chunks_received = set()
 
     def handle_notification(self, _handle, data: bytearray):
-        print(f"  PKT len={len(data)} marker=0x{data[0]:02X}" if data else "  PKT empty")
         if len(data) < 2:
             return
 
@@ -87,31 +86,24 @@ class IRFrameReceiver:
 NUS_SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e"
 
 async def find_device():
-    print(f"Scanning for '{DEVICE_NAME}' by service UUID...")
-    # Primary: find by NUS service UUID in advertising packet
-    device = await BleakScanner.find_device_by_filter(
-        lambda d, adv: NUS_SERVICE_UUID in (adv.service_uuids or []),
-        timeout=15.0
-    )
+    print(f"Scanning for '{DEVICE_NAME}' by name or NUS UUID...")
+    def _match(d, adv):
+        if d.name and DEVICE_NAME.lower() in d.name.lower():
+            return True
+        if adv.local_name and DEVICE_NAME.lower() in adv.local_name.lower():
+            return True
+        if NUS_SERVICE_UUID in (adv.service_uuids or []):
+            return True
+        return False
+
+    device = await BleakScanner.find_device_by_filter(_match, timeout=15.0)
     if device is not None:
-        print(f"Found by service UUID: {device.name!r} [{device.address}]")
+        print(f"Found: {device.name!r} [{device.address}]")
         return device
 
-    # Fallback: broad scan, match by name
-    print("Service UUID not found, falling back to name scan...")
-    devices = await BleakScanner.discover(timeout=10.0)
-    for d in devices:
-        print(f"  Saw: {d.name!r} [{d.address}]")
-    match = next(
-        (d for d in devices if d.name and DEVICE_NAME.lower() in d.name.lower()),
-        None
+    raise RuntimeError(
+        f"Device '{DEVICE_NAME}' not found. Toggle macOS Bluetooth off/on and retry."
     )
-    if match is None:
-        raise RuntimeError(
-            f"Device '{DEVICE_NAME}' not found. Is it powered on and advertising?"
-        )
-    print(f"Connecting to: {match.name!r} [{match.address}]")
-    return match
 
 
 async def run_ble(on_frame, stop_event: asyncio.Event):

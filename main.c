@@ -14,6 +14,7 @@
 #include "source/app_hw/task_ble.h"
 #include "source/app_hw/i2c.h"
 #include "source/app_hw/task_ir_sensor.h"
+#include "source/app_hw/task_servo_ctrl.h"
 
 int main(void)
 {
@@ -27,6 +28,9 @@ int main(void)
 
     task_console_init();
     task_print_info("FW: Solder Sentry BLE build");
+
+    /* Servos: start before IR so the tracker is ready when frames arrive */
+    task_servo_ctrl_init();
 
     /* I2C must be up before IR sensor task starts */
     rslt = i2c_init(MODULE_SITE_1);

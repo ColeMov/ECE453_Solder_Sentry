@@ -10,7 +10,21 @@
 #include "task_console.h"
 #include "task_ir_sensor.h"
 #include "cy_ble_clk.h"
+#include "cy_sysint.h"
 #include <string.h>
+
+/* BLESS interrupt is MANDATORY for single-CM4 mode. Without it the link
+ * layer can't service CONNECT_REQ and central sees a 10 s timeout. */
+static const cy_stc_sysint_t s_bless_isr_cfg =
+{
+    .intrSrc      = bless_interrupt_IRQn,
+    .intrPriority = 1u,
+};
+
+static void bless_interrupt_isr(void)
+{
+    Cy_BLE_BlessIsrHandler();
+}
 
 /*
  * IR frame BLE protocol (binary, 9 packets per frame at 10 Hz):
@@ -52,6 +66,7 @@ static cy_stc_ble_conn_handle_t ble_conn_handle;
 static bool ble_connected = false;
 static bool notifications_enabled = false;
 static bool ble_stack_on = false;
+static volatile bool ble_stack_busy = false;
 
 /* Generated stack params are mutable in cycfg_ble.c */
 extern cy_stc_ble_stack_params_t stackParam;
@@ -100,10 +115,40 @@ static void ble_event_handler(uint32_t eventCode, void *eventParam)
             task_print_info("BLE: stack on, start advertising");
             break;
 
-        case CY_BLE_EVT_GAP_DEVICE_CONNECTED:
+        case CY_BLE_EVT_STACK_BUSY_STATUS:
+        {
+            cy_stc_ble_l2cap_state_info_t *st =
+                (cy_stc_ble_l2cap_state_info_t *)eventParam;
+            ble_stack_busy = (st->flowState == CY_BLE_STACK_STATE_BUSY);
+            break;
+        }
+
+        case CY_BLE_EVT_GATT_CONNECT_IND:
+            /* This event carries the real cy_stc_ble_conn_handle_t needed
+             * for all subsequent GATT operations (notifications, etc). */
             ble_conn_handle = *(cy_stc_ble_conn_handle_t *)eventParam;
             ble_connected = true;
-            task_print_info("BLE: connected (bdHandle=%u)", ble_conn_handle.bdHandle);
+            task_print_info("BLE: GATT connected");
+            break;
+
+        case CY_BLE_EVT_GAP_DEVICE_CONNECTED:
+        {
+            /* Request fastest connection parameters macOS will accept:
+             *   interval 7.5 ms .. 15 ms, latency 0, timeout 5 s */
+            static cy_stc_ble_gap_conn_update_param_info_t connParams;
+            connParams.connIntvMin   = 6u;    /* 6 * 1.25 ms = 7.5 ms */
+            connParams.connIntvMax   = 12u;   /* 12 * 1.25 ms = 15 ms */
+            connParams.connLatency   = 0u;
+            connParams.supervisionTO = 500u;  /* 5 s */
+            connParams.bdHandle      = ble_conn_handle.bdHandle;
+            (void)Cy_BLE_L2CAP_LeConnectionParamUpdateRequest(&connParams);
+            break;
+        }
+
+        case CY_BLE_EVT_GATT_DISCONNECT_IND:
+            ble_connected = false;
+            notifications_enabled = false;
+            task_print_info("BLE: GATT disconnected");
             break;
 
         case CY_BLE_EVT_GAP_DEVICE_DISCONNECTED:
@@ -188,57 +233,130 @@ static void ble_send_notification(const char *str)
 }
 
 /* Send one 8x8 IR frame as 9 BLE notification packets. */
-static void ble_send_ir_frame(const amg8834_frame_t *frame)
+/* Send one notification directly via Cy_BLE_GATTS_Notification (bypasses
+ * local GATT DB write — the generated DB has the TX char storage sized at
+ * 0 bytes which would make SendNotification fail with INVALID_OPERATION). */
+/* Strictly non-blocking: one attempt, returns immediately.
+ * Caller is responsible for retrying on BUSY (next task loop iter). */
+static cy_en_ble_api_result_t ble_tx_notify_raw(
+    cy_ble_gatt_db_attr_handle_t hdl, const uint8_t *data, uint16_t len)
 {
-    static uint8_t seq = 0u;
-    uint8_t pkt[BLE_IR_PACKET_LEN];
-    cy_ble_gatt_db_attr_handle_t txHandle;
-    cy_stc_ble_gatt_handle_value_pair_t hvp;
-    uint32_t chunk;
-    uint32_t p;
-    int16_t val;
-
-    if (!ble_connected || !notifications_enabled || (frame == NULL))
+    if (ble_stack_busy)
     {
+        return CY_BLE_ERROR_INVALID_OPERATION;
+    }
+    cy_stc_ble_gatts_handle_value_ntf_t p;
+    p.connHandle              = ble_conn_handle;
+    p.handleValPair.attrHandle = hdl;
+    p.handleValPair.value.val = (uint8_t *)data;
+    p.handleValPair.value.len = len;
+    return Cy_BLE_GATTS_Notification(&p);
+}
+
+/* Diagnostic counters (cleared by task loop after print) */
+static volatile uint32_t dbg_frames_attempted = 0u;
+static volatile uint32_t dbg_frames_ok        = 0u;
+static volatile uint32_t dbg_last_err         = 0u;
+static volatile uint32_t dbg_ir_queue_hits    = 0u;
+
+/* Stateful IR frame pump.
+ *
+ * Instead of trying to send all 9 packets in one call (which either blocks
+ * on stack back-pressure or drops entire frames), we hold the current frame
+ * in a buffer and send ONE packet per task-loop iteration. The BLE task's
+ * 5 ms vTaskDelay then runs between every packet, giving all higher-priority
+ * tasks (IR / TOF / captouch / IO expander) plenty of CPU.
+ *
+ * On BUSY we simply don't advance the state — next tick retries the same
+ * packet. No busy-waiting, no frame drops under light back-pressure. */
+typedef enum {
+    IR_TX_IDLE = 0,     /* need to dequeue a frame */
+    IR_TX_HEADER,       /* send header packet */
+    IR_TX_DATA          /* send data packet [ir_tx_chunk] */
+} ir_tx_state_t;
+
+static ir_tx_state_t ir_tx_state = IR_TX_IDLE;
+static amg8834_frame_t ir_tx_frame;
+static uint8_t ir_tx_chunk = 0u;
+static uint8_t ir_tx_seq = 0u;
+
+static void ble_ir_pump(void)
+{
+    if (!ble_connected || !notifications_enabled)
+    {
+        ir_tx_state = IR_TX_IDLE;
         return;
     }
 
-    txHandle = NUS_TX_CHAR().customServCharHandle;
+    cy_ble_gatt_db_attr_handle_t txHandle = NUS_TX_CHAR().customServCharHandle;
+    uint8_t pkt[BLE_IR_PACKET_LEN];
+    int16_t val;
 
-    /* Header packet */
-    memset(pkt, 0, BLE_IR_PACKET_LEN);
-    pkt[0] = BLE_IR_FRAME_MARKER;
-    pkt[1] = seq++;
-    val = (int16_t)(frame->thermistor_c / AMG8834_THERM_LSB_DEGC);
-    pkt[2] = (uint8_t)((uint16_t)val >> 8u);
-    pkt[3] = (uint8_t)((uint16_t)val & 0xFFu);
+    /* Try to start a new frame */
+    if (ir_tx_state == IR_TX_IDLE)
+    {
+        if ((q_ir_sensor_frame == NULL) ||
+            (xQueueReceive(q_ir_sensor_frame, &ir_tx_frame, 0u) != pdPASS))
+        {
+            return;
+        }
+        dbg_ir_queue_hits++;
+        dbg_frames_attempted++;
+        ir_tx_chunk = 0u;
+        ir_tx_state = IR_TX_HEADER;
+    }
 
-    hvp.attrHandle = txHandle;
-    hvp.value.val  = pkt;
-    hvp.value.len  = BLE_IR_PACKET_LEN;
-    (void)Cy_BLE_GATTS_SendNotification(&ble_conn_handle, &hvp);
+    /* Send exactly one packet per call */
+    if (ir_tx_state == IR_TX_HEADER)
+    {
+        memset(pkt, 0, BLE_IR_PACKET_LEN);
+        pkt[0] = BLE_IR_FRAME_MARKER;
+        pkt[1] = ir_tx_seq;
+        val = (int16_t)(ir_tx_frame.thermistor_c / AMG8834_THERM_LSB_DEGC);
+        pkt[2] = (uint8_t)((uint16_t)val >> 8u);
+        pkt[3] = (uint8_t)((uint16_t)val & 0xFFu);
 
-    /* 8 data packets, 8 pixels each */
-    for (chunk = 0u; chunk < BLE_IR_CHUNKS; chunk++)
+        cy_en_ble_api_result_t rc = ble_tx_notify_raw(txHandle, pkt, BLE_IR_PACKET_LEN);
+        if (rc == CY_BLE_SUCCESS)
+        {
+            ir_tx_seq++;
+            ir_tx_state = IR_TX_DATA;
+            ir_tx_chunk = 0u;
+        }
+        else
+        {
+            dbg_last_err = (uint32_t)rc;
+        }
+        return;
+    }
+
+    if (ir_tx_state == IR_TX_DATA)
     {
         memset(pkt, 0, BLE_IR_PACKET_LEN);
         pkt[0] = BLE_IR_DATA_MARKER;
-        pkt[1] = (uint8_t)chunk;
-
-        for (p = 0u; p < BLE_IR_PIX_PER_CHUNK; p++)
+        pkt[1] = ir_tx_chunk;
+        for (uint32_t p = 0u; p < BLE_IR_PIX_PER_CHUNK; p++)
         {
-            uint32_t idx = (chunk * BLE_IR_PIX_PER_CHUNK) + p;
-            val = (int16_t)(frame->pixels_c[idx] / AMG8834_PIXEL_LSB_DEGC);
+            uint32_t idx = ((uint32_t)ir_tx_chunk * BLE_IR_PIX_PER_CHUNK) + p;
+            val = (int16_t)(ir_tx_frame.pixels_c[idx] / AMG8834_PIXEL_LSB_DEGC);
             pkt[2u + (p * 2u)]      = (uint8_t)((uint16_t)val >> 8u);
             pkt[2u + (p * 2u) + 1u] = (uint8_t)((uint16_t)val & 0xFFu);
         }
 
-        hvp.value.val = pkt;
-        hvp.value.len = BLE_IR_PACKET_LEN;
-        (void)Cy_BLE_GATTS_SendNotification(&ble_conn_handle, &hvp);
-
-        /* Yield briefly so the BLE stack can process between packets */
-        vTaskDelay(pdMS_TO_TICKS(5u));
+        cy_en_ble_api_result_t rc = ble_tx_notify_raw(txHandle, pkt, BLE_IR_PACKET_LEN);
+        if (rc == CY_BLE_SUCCESS)
+        {
+            ir_tx_chunk++;
+            if (ir_tx_chunk >= BLE_IR_CHUNKS)
+            {
+                ir_tx_state = IR_TX_IDLE;
+                dbg_frames_ok++;
+            }
+        }
+        else
+        {
+            dbg_last_err = (uint32_t)rc;
+        }
     }
 }
 
@@ -252,24 +370,10 @@ static void task_ble(void *param)
     for (;;)
     {
         Cy_BLE_ProcessEvents();
-        heartbeat_ms += 10u;
-        if (heartbeat_ms >= 2000u)
+        heartbeat_ms += 5u;
+        if (heartbeat_ms >= 10000u)
         {
-            g_ble_diag_state = 13u;
-            task_print_info("BLE[HB]: conn=%u notif=%u adv_state=%u stack_on=%u eco=%u addr=%02X:%02X:%02X:%02X:%02X:%02X",
-                            ble_connected ? 1u : 0u,
-                            notifications_enabled ? 1u : 0u,
-                            (unsigned)Cy_BLE_GetAdvertisementState(),
-                            ble_stack_on ? 1u : 0u,
-                            Cy_BLE_EcoIsEnabled() ? 1u : 0u,
-                            (unsigned)cy_ble_configPtr->deviceAddress->bdAddr[5],
-                            (unsigned)cy_ble_configPtr->deviceAddress->bdAddr[4],
-                            (unsigned)cy_ble_configPtr->deviceAddress->bdAddr[3],
-                            (unsigned)cy_ble_configPtr->deviceAddress->bdAddr[2],
-                            (unsigned)cy_ble_configPtr->deviceAddress->bdAddr[1],
-                            (unsigned)cy_ble_configPtr->deviceAddress->bdAddr[0]);
             heartbeat_ms = 0u;
-
             /* Retry advertising if disconnected */
             if (!ble_connected && ble_stack_on &&
                 (Cy_BLE_GetAdvertisementState() == CY_BLE_ADV_STATE_STOPPED))
@@ -285,17 +389,35 @@ static void task_ble(void *param)
             ble_send_notification(item.msg);
         }
 
-        /* Stream IR frames when connected */
-        if (ble_connected && notifications_enabled && (q_ir_sensor_frame != NULL))
+        /* Stream IR frames: one packet per iteration, back-pressure aware */
+        ble_ir_pump();
+
+        /* Diagnostic dump every 2 s while connected */
+        static uint32_t dbg_ms = 0u;
+        dbg_ms += 5u;
+        if (dbg_ms >= 2000u)
         {
-            amg8834_frame_t frame;
-            if (xQueueReceive(q_ir_sensor_frame, &frame, 0u) == pdPASS)
+            dbg_ms = 0u;
+            if (ble_connected)
             {
-                ble_send_ir_frame(&frame);
+                unsigned qlen = (q_ir_sensor_frame != NULL)
+                                ? (unsigned)uxQueueMessagesWaiting(q_ir_sensor_frame)
+                                : 0u;
+                task_print_info(
+                    "BLE diag: conn=%d notif=%d ir_hits=%lu attempt=%lu ok=%lu lastErr=0x%06lX qlen=%u",
+                    (int)ble_connected, (int)notifications_enabled,
+                    (unsigned long)dbg_ir_queue_hits,
+                    (unsigned long)dbg_frames_attempted,
+                    (unsigned long)dbg_frames_ok,
+                    (unsigned long)dbg_last_err,
+                    qlen);
+                dbg_ir_queue_hits = 0u;
+                dbg_frames_attempted = 0u;
+                dbg_frames_ok = 0u;
             }
         }
 
-        vTaskDelay(pdMS_TO_TICKS(10u));
+        vTaskDelay(pdMS_TO_TICKS(5u));
     }
 }
 
@@ -349,6 +471,15 @@ void task_ble_init(void)
     }
     g_ble_diag_state = 2u;
 
+    /* Install the BLESS ISR BEFORE Cy_BLE_Init so the link-layer can
+     * service CONNECT_REQ and all subsequent link events. Without this
+     * the stack advertises fine but silently ignores connection requests. */
+    cy_ble_config.hw->blessIsrConfig = &s_bless_isr_cfg;
+    (void)Cy_SysInt_Init(&s_bless_isr_cfg, &bless_interrupt_isr);
+    NVIC_ClearPendingIRQ(s_bless_isr_cfg.intrSrc);
+    NVIC_EnableIRQ(s_bless_isr_cfg.intrSrc);
+    task_print_info("BLE: BLESS ISR hooked (IRQn=%d)", (int)s_bless_isr_cfg.intrSrc);
+
     /* Must be registered before Cy_BLE_Init() in host mode. */
     Cy_BLE_RegisterEventCallback(ble_event_handler);
 
@@ -375,7 +506,7 @@ void task_ble_init(void)
                                      "BLE",
                                      6 * configMINIMAL_STACK_SIZE,
                                      NULL,
-                                     configMAX_PRIORITIES - 5,
+                                     configMAX_PRIORITIES - 7,
                                      NULL);
     if (task_ok != pdPASS)
     {

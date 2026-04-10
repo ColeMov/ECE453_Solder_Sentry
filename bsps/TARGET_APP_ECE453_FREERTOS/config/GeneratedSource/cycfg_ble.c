@@ -79,18 +79,13 @@
     {
         /* Peripheral configuration 0 */
         {
-            /* Flags (3 bytes): LE General Discoverable + BR/EDR Not Supported
-             * Complete List of 128-bit UUIDs (18 bytes): NUS service
-             *   6E400001-B5A3-F393-E0A9-E50E24DCCA9E (little-endian)
-             * Total: 21 bytes */
-            .advData = {
-                0x02u, 0x01u, 0x06u,
-                0x11u, 0x07u,
-                0x9Eu, 0xCAu, 0xDCu, 0x24u, 0x0Eu, 0xE5u, 0xA9u, 0xE0u,
-                0x93u, 0xF3u, 0xA3u, 0xB5u, 0x01u, 0x00u, 0x40u, 0x6Eu,
+            .advData = { 0x02u, 0x01u, 0x05u, 0x00u, 0x00u, 0x00u,
                 0x00u, 0x00u, 0x00u, 0x00u, 0x00u, 0x00u,
-                0x00u, 0x00u, 0x00u, 0x00u },
-            .advDataLen = 0x15u,
+                0x00u, 0x00u, 0x00u, 0x00u, 0x00u, 0x00u,
+                0x00u, 0x00u, 0x00u, 0x00u, 0x00u, 0x00u,
+                0x00u, 0x00u, 0x00u, 0x00u, 0x00u, 0x00u,
+                0x00u }, 
+            .advDataLen = 0x03u, 
         },
     };
 
@@ -100,13 +95,13 @@
     {
         /* Peripheral configuration 0 */
         {
-            /* Complete Local Name: "ECE453" (8 bytes: len=7, type=0x09, 6 chars) */
-            .scanRspData = { 0x07u, 0x09u, 'E', 'C', 'E', '4', '5', '3',
+            .scanRspData = { 0x00u, 0x00u, 0x00u, 0x00u, 0x00u, 0x00u,
                 0x00u, 0x00u, 0x00u, 0x00u, 0x00u, 0x00u,
                 0x00u, 0x00u, 0x00u, 0x00u, 0x00u, 0x00u,
                 0x00u, 0x00u, 0x00u, 0x00u, 0x00u, 0x00u,
-                0x00u, 0x00u, 0x00u, 0x00u, 0x00u },
-            .scanRspDataLen = 0x08u,
+                0x00u, 0x00u, 0x00u, 0x00u, 0x00u, 0x00u,
+                0x00u }, 
+            .scanRspDataLen = 0x00u, 
         },
     };
 
@@ -122,7 +117,7 @@
     {
         /* Peripheral configuration 0 */
         {
-            .discMode = 0x02u,  /* General Discoverable — macOS requires this */
+            .discMode = 0x01u, 
             .advParam = &cy_ble_discoveryParam[0], 
             .advData = &cy_ble_discoveryData[0], 
             .scanRspData = &cy_ble_scanRspData[0], 
