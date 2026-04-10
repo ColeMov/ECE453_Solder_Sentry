@@ -42,6 +42,7 @@
  * Include header files
  ******************************************************************************/
 #include "task_console.h"
+#include "task_ble.h"
 #include <string.h>
 
 //*******************************************************************************
@@ -339,6 +340,17 @@ void task_debug_printf(debug_message_type_t message_type, char *str_ptr, ...)
 
         message_data.message_type = message_type;
         message_data.str_ptr = message_buffer;
+
+        /* Forward a copy to the BLE notification queue (non-blocking, best-effort) */
+#ifdef COMPONENT_BLESS
+        if (q_ble_tx != NULL && message_type != none)
+        {
+            ble_tx_item_t ble_item;
+            strncpy(ble_item.msg, message_buffer, sizeof(ble_item.msg) - 1u);
+            ble_item.msg[sizeof(ble_item.msg) - 1u] = '\0';
+            xQueueSendToBack(q_ble_tx, &ble_item, 0u);
+        }
+#endif /* COMPONENT_BLESS */
 
         /* The receiver task is responsible to free the memory from here on */
         if (pdPASS != xQueueSendToBack(q_console_tx, &message_data, 0u))
