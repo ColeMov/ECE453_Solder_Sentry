@@ -12,6 +12,7 @@
 #include "ece453_pins.h"
 
 /* Macros */
+/* 400 kHz for VL53Lx fast mode; use 100000u for standard mode if needed */
 #define I2C_MASTER_FREQUENCY 100000u
 
 /* Public Global Variables */

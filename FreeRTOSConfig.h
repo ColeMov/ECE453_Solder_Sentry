@@ -53,6 +53,7 @@
  */
 #include "cycfg_system.h"
 
+
 #define configUSE_PREEMPTION                    1
 #define configUSE_PORT_OPTIMISED_TASK_SELECTION 0
 extern uint32_t SystemCoreClock;
@@ -76,7 +77,7 @@ extern uint32_t SystemCoreClock;
 /* Memory allocation related definitions. */
 #define configSUPPORT_STATIC_ALLOCATION         1
 #define configSUPPORT_DYNAMIC_ALLOCATION        1
-#define configTOTAL_HEAP_SIZE                   (64 * 1024)
+#define configTOTAL_HEAP_SIZE                   (64*1024)
 #define configAPPLICATION_ALLOCATED_HEAP        0
 
 /* Hook function related definitions. */
@@ -204,7 +205,6 @@ standard names - or at least those used in the unmodified vector table. */
 #define NO_HEAP_ALLOCATION                      (0)
 
 #define configHEAP_ALLOCATION_SCHEME            (HEAP_ALLOCATION_TYPE4)
-#define configCOMMAND_INT_MAX_OUTPUT_SIZE 80
 
 /* Check if the ModusToolbox Device Configurator Power personality parameter
  * "System Idle Power Mode" is set to either "CPU Sleep" or "System Deep Sleep".
@@ -250,5 +250,6 @@ extern void vApplicationSleep( uint32_t xExpectedIdleTime );
 #else
 #define configUSE_NEWLIB_REENTRANT              1
 #endif
+#define configCOMMAND_INT_MAX_OUTPUT_SIZE 80
 
 #endif /* FREERTOS_CONFIG_H */

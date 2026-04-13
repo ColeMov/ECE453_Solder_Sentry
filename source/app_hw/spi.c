@@ -9,6 +9,7 @@
 #include "cy_result.h"
 #include "cyhal_psoc6_01_116_bga_ble.h"
 #include "ece453_pins.h"
+#include <string.h>
 #include "main.h"
 
 

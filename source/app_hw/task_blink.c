@@ -20,6 +20,7 @@
  *
  */
 #include "task_blink.h"
+#include <string.h>
 
 /******************************************************************************/
 /* Function Declarations                                                      */
@@ -160,7 +161,7 @@ void task_blink_init(void)
   cy_rslt_t rslt;
 
   // Initialize the pin that controls the LED
-  rslt = cyhal_gpio_configure(PIN_LED, CYHAL_GPIO_DIR_OUTPUT, CYHAL_GPIO_DRIVE_STRONG);
+  rslt = cyhal_gpio_init(PIN_LED, CYHAL_GPIO_DIR_OUTPUT, CYHAL_GPIO_DRIVE_STRONG, 1);
   CY_ASSERT(CY_RSLT_SUCCESS == rslt);
 
   /* Create the Queue used to control blinking of the status LED*/

@@ -85,7 +85,7 @@ VERBOSE=
 # ... then code in directories named COMPONENT_foo and COMPONENT_bar will be
 # added to the build
 #
-COMPONENTS=FREERTOS
+COMPONENTS=FREERTOS BLESS BLESS_HOST BLESS_CONTROLLER
 
 # Like COMPONENTS, but disable optional code that was enabled by default.
 DISABLE_COMPONENTS=
@@ -94,13 +94,47 @@ DISABLE_COMPONENTS=
 # tree for source code and builds it. The SOURCES variable can be used to
 # manually add source code to the build process from a location not searched
 # by default, or otherwise not found by the build system.
-SOURCES=
+SOURCES= \
+    ./STSW-IMG021/VL53L3CX_LinuxDriver_1.1.7_bare_1.2.13/driver/vl53Lx/src/vl53lx_api_calibration.c \
+    ./STSW-IMG021/VL53L3CX_LinuxDriver_1.1.7_bare_1.2.13/driver/vl53Lx/src/vl53lx_api_core.c \
+    ./STSW-IMG021/VL53L3CX_LinuxDriver_1.1.7_bare_1.2.13/driver/vl53Lx/src/vl53lx_api_debug.c \
+    ./STSW-IMG021/VL53L3CX_LinuxDriver_1.1.7_bare_1.2.13/driver/vl53Lx/src/vl53lx_api_preset_modes.c \
+    ./STSW-IMG021/VL53L3CX_LinuxDriver_1.1.7_bare_1.2.13/driver/vl53Lx/src/vl53lx_api.c \
+    ./STSW-IMG021/VL53L3CX_LinuxDriver_1.1.7_bare_1.2.13/driver/vl53Lx/src/vl53lx_core_support.c \
+    ./STSW-IMG021/VL53L3CX_LinuxDriver_1.1.7_bare_1.2.13/driver/vl53Lx/src/vl53lx_core.c \
+    ./STSW-IMG021/VL53L3CX_LinuxDriver_1.1.7_bare_1.2.13/driver/vl53Lx/src/vl53lx_hist_char.c \
+    ./STSW-IMG021/VL53L3CX_LinuxDriver_1.1.7_bare_1.2.13/driver/vl53Lx/src/vl53lx_nvm_debug.c \
+    ./STSW-IMG021/VL53L3CX_LinuxDriver_1.1.7_bare_1.2.13/driver/vl53Lx/src/vl53lx_nvm.c \
+    ./STSW-IMG021/VL53L3CX_LinuxDriver_1.1.7_bare_1.2.13/driver/vl53Lx/src/vl53lx_register_funcs.c \
+    ./STSW-IMG021/VL53L3CX_LinuxDriver_1.1.7_bare_1.2.13/driver/vl53Lx/src/vl53lx_silicon_core.c \
+    ./STSW-IMG021/VL53L3CX_LinuxDriver_1.1.7_bare_1.2.13/driver/vl53Lx/src/vl53lx_wait.c \
+    ./STSW-IMG021/VL53L3CX_LinuxDriver_1.1.7_bare_1.2.13/driver/vl53Lx/protected/src/vl53lx_dmax.c \
+    ./STSW-IMG021/VL53L3CX_LinuxDriver_1.1.7_bare_1.2.13/driver/vl53Lx/protected/src/vl53lx_hist_algos_gen3.c \
+    ./STSW-IMG021/VL53L3CX_LinuxDriver_1.1.7_bare_1.2.13/driver/vl53Lx/protected/src/vl53lx_hist_algos_gen4.c \
+    ./STSW-IMG021/VL53L3CX_LinuxDriver_1.1.7_bare_1.2.13/driver/vl53Lx/protected/src/vl53lx_hist_core.c \
+    ./STSW-IMG021/VL53L3CX_LinuxDriver_1.1.7_bare_1.2.13/driver/vl53Lx/protected/src/vl53lx_hist_funcs.c \
+    ./STSW-IMG021/VL53L3CX_LinuxDriver_1.1.7_bare_1.2.13/driver/vl53Lx/protected/src/vl53lx_sigma_estimate.c \
+    ./STSW-IMG021/VL53L3CX_LinuxDriver_1.1.7_bare_1.2.13/driver/vl53Lx/protected/src/vl53lx_xtalk.c
 
 # Like SOURCES, but for include directories. Value should be paths to
 # directories (without a leading -I).
-INCLUDES=
+INCLUDES= \
+    . \
+    ./STSW-IMG021/VL53L3CX_LinuxDriver_1.1.7_bare_1.2.13/driver/vl53Lx \
+    ./STSW-IMG021/VL53L3CX_LinuxDriver_1.1.7_bare_1.2.13/driver/vl53Lx/inc \
+    ./STSW-IMG021/VL53L3CX_LinuxDriver_1.1.7_bare_1.2.13/driver/vl53Lx/protected/inc
 
 # Add additional defines to the build process (without a leading -D).
+# Exclude ST driver dirs from auto-discovery so we compile them only via SOURCES (avoids duplicate symbols).
+CY_IGNORE= \
+    ./STSW-IMG021/VL53L3CX_LinuxDriver_1.1.7_bare_1.2.13/android \
+    ./STSW-IMG021/VL53L3CX_LinuxDriver_1.1.7_bare_1.2.13/driver/vl53Lx/src \
+    ./STSW-IMG021/VL53L3CX_LinuxDriver_1.1.7_bare_1.2.13/driver/vl53Lx/protected/src \
+    ./STSW-IMG021/VL53L3CX_LinuxDriver_1.1.7_bare_1.2.13/driver/vl53Lx/stmvl53lx_i2c.c \
+    ./STSW-IMG021/VL53L3CX_LinuxDriver_1.1.7_bare_1.2.13/driver/vl53Lx/stmvl53lx_log.c \
+    ./STSW-IMG021/VL53L3CX_LinuxDriver_1.1.7_bare_1.2.13/driver/vl53Lx/stmvl53lx_module-i2c.c \
+    ./STSW-IMG021/VL53L3CX_LinuxDriver_1.1.7_bare_1.2.13/driver/vl53Lx/stmvl53lx_module.c
+
 DEFINES=
 
 # Select softfp or hardfp floating point. Default is softfp.
@@ -110,7 +144,7 @@ VFP_SELECT=hardfp
 #
 # NOTE: Includes and defines should use the INCLUDES and DEFINES variable
 # above.
-CFLAGS=
+CFLAGS+=-include stddef.h -include string.h -Wno-implicit-function-declaration -Wno-incompatible-pointer-types
 
 # Additional / custom C++ compiler flags.
 #

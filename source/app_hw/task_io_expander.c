@@ -9,6 +9,7 @@
  *
  */
 #include "task_io_expander.h"
+#include <string.h>
 
 /******************************************************************************/
 /* Function Declarations                                                      */

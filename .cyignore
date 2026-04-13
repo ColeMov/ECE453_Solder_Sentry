@@ -1,3 +1,6 @@
+# Desktop GUI (Python) — not part of firmware build
+desktop
+
 # Documentation
 images
 
@@ -5,4 +8,10 @@ images
 .mtbLaunchConfigs
 .settings
 .vscode
+
+# Exclude Linux kernel driver sources from ST package
+STSW-IMG021/**/stmvl53lx*.c
+# Exclude ST VL53Lx driver src dirs from auto-discovery (built only via Makefile SOURCES)
+STSW-IMG021/VL53L3CX_LinuxDriver_1.1.7_bare_1.2.13/driver/vl53Lx/src
+STSW-IMG021/VL53L3CX_LinuxDriver_1.1.7_bare_1.2.13/driver/vl53Lx/protected/src
 

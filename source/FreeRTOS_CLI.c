@@ -34,6 +34,7 @@
 
 /* Utils includes. */
 #include "FreeRTOS_CLI.h"
+#include <string.h>
 
 /* If the application writer needs to place the buffer used by the CLI at a
 fixed address then set configAPPLICATION_PROVIDES_cOutputBuffer to 1 in
