@@ -49,7 +49,11 @@ static cyhal_pwm_t g_pwm_tilt;
 
 static uint16_t g_pan_deg = SERVO_DEFAULT_PAN_DEG;
 static uint16_t g_tilt_deg = SERVO_DEFAULT_TILT_DEG;
+static uint16_t g_pan_target_deg = SERVO_DEFAULT_PAN_DEG;
+static uint16_t g_tilt_target_deg = SERVO_DEFAULT_TILT_DEG;
 static bool g_servo_track_enabled = SERVO_TRACK_IR_ENABLE;
+
+static void servo_ramp_tick(void);
 
 static const CLI_Command_Definition_t xServoPan =
 {
@@ -312,8 +316,8 @@ static bool servo_run_sweep(const servo_ctrl_message_t *msg)
 
 static void servo_track_hottest_ir_point(void)
 {
-    static TickType_t s_last_track_tick = 0;
-    TickType_t now_ticks;
+    static TickType_t s_last_frame_ts = 0;
+    TickType_t frame_ts;
     uint32_t hot_row;
     uint32_t hot_col;
     float hot_temp_c;
@@ -328,58 +332,142 @@ static void servo_track_hottest_ir_point(void)
         return;
     }
 
-    now_ticks = xTaskGetTickCount();
-    if ((s_last_track_tick != 0u) && ((now_ticks - s_last_track_tick) < pdMS_TO_TICKS(SERVO_TRACK_PERIOD_MS)))
+    /* Fresh-frame gate: only act once per new IR frame (10 fps = 100 ms).
+       This synchronizes tracker decisions with sensor data so we never
+       waste a cycle on a stale frame and never skip a fresh one. */
+    frame_ts = amg8834_get_latest_timestamp();
+    if (frame_ts == 0u || frame_ts == s_last_frame_ts)
     {
         return;
     }
-    s_last_track_tick = now_ticks;
+    s_last_frame_ts = frame_ts;
 
-    if (!amg8834_get_hottest_pixel(&hot_row, &hot_col, &hot_temp_c))
+    float mean_temp_c;
+    if (!amg8834_get_hottest_and_mean(&hot_row, &hot_col, &hot_temp_c, &mean_temp_c))
     {
         return;
     }
 
-    /* 8x8 Grid-EYE center is between pixels 3 and 4; use signed error from center. */
+    /* Absolute gate rejects body heat (skin peaks ~34 degC) so the tracker
+       only locks onto iron-class heat sources. Contrast gate still required
+       to reject near-uniform scenes where even the "hottest" pixel is noise. */
+    if (hot_temp_c < SERVO_TRACK_MIN_ABS_TEMP_C)
+    {
+        return;
+    }
+    if ((hot_temp_c - mean_temp_c) < SERVO_TRACK_MIN_CONTRAST_C)
+    {
+        return;
+    }
+
+    /* 8x8 Grid-EYE center is between pixels 3 and 4; signed error from raw
+       hot-pixel location (no EMA — temporal smoothing lags fast targets into
+       phantom middle positions that fall in deadband and freeze the tracker).
+       PAN_PIX_BIAS shifts aim column to compensate for sensor/fan parallax. */
     row_error = (int32_t)hot_row - (int32_t)(AMG8834_ROWS / 2u);
-    col_error = (int32_t)hot_col - (int32_t)(AMG8834_COLS / 2u);
+    col_error = (int32_t)hot_col - (int32_t)(AMG8834_COLS / 2u)
+                - (int32_t)SERVO_TRACK_PAN_PIX_BIAS;
+
+    if (SERVO_TRACK_INVERT_COL)
+    {
+        col_error = -col_error;
+    }
+    if (SERVO_TRACK_INVERT_ROW)
+    {
+        row_error = -row_error;
+    }
 
     (void)hot_temp_c;
 
-    if (col_error > (int32_t)SERVO_TRACK_DEADBAND_PIX)
+    /* Predict where the error will land once already-commanded motion finishes.
+       g_pan_target_deg - g_pan_deg is in-flight servo motion (ramp hasn't
+       caught up yet). After inversion, commanded pan increase reduces col_error
+       at ~1 pixel per FOV_DEG_PER_PIXEL servo degrees. Subtracting in-flight
+       motion prevents stacking new commands on top of unfinished ones — this
+       is what causes overshoot at high gain even when gain itself is stable. */
+    const float kFovDegPerPixel = 7.5f;
+    int32_t pending_pan = (int32_t)g_pan_target_deg - (int32_t)g_pan_deg;
+    int32_t pending_tilt = (int32_t)g_tilt_target_deg - (int32_t)g_tilt_deg;
+    float predicted_col = (float)col_error - (float)pending_pan / kFovDegPerPixel;
+    float predicted_row = (float)row_error - (float)pending_tilt / kFovDegPerPixel;
+
+    int32_t col_pred = (int32_t)(predicted_col + ((predicted_col >= 0.0f) ? 0.5f : -0.5f));
+    int32_t row_pred = (int32_t)(predicted_row + ((predicted_row >= 0.0f) ? 0.5f : -0.5f));
+    int32_t col_abs = (col_pred < 0) ? -col_pred : col_pred;
+    int32_t row_abs = (row_pred < 0) ? -row_pred : row_pred;
+
+    if (col_abs > (int32_t)SERVO_TRACK_DEADBAND_PIX)
     {
-        next_pan = (int32_t)g_pan_deg + (int32_t)SERVO_TRACK_STEP_DEG;
-        g_pan_deg = servo_clamp_deg(next_pan);
-        changed = true;
-    }
-    else if (col_error < -(int32_t)SERVO_TRACK_DEADBAND_PIX)
-    {
-        next_pan = (int32_t)g_pan_deg - (int32_t)SERVO_TRACK_STEP_DEG;
-        g_pan_deg = servo_clamp_deg(next_pan);
+        int32_t step = (int32_t)SERVO_TRACK_STEP_DEG * col_abs;
+        next_pan = (int32_t)g_pan_target_deg + ((col_pred > 0) ? step : -step);
+        g_pan_target_deg = servo_clamp_deg(next_pan);
         changed = true;
     }
 
     /* Positive row is lower in image; tilt down for positive row error. */
-    if (row_error > (int32_t)SERVO_TRACK_DEADBAND_PIX)
+    if (row_abs > (int32_t)SERVO_TRACK_DEADBAND_PIX)
     {
-        next_tilt = (int32_t)g_tilt_deg + (int32_t)SERVO_TRACK_STEP_DEG;
-        g_tilt_deg = servo_clamp_deg(next_tilt);
-        changed = true;
-    }
-    else if (row_error < -(int32_t)SERVO_TRACK_DEADBAND_PIX)
-    {
-        next_tilt = (int32_t)g_tilt_deg - (int32_t)SERVO_TRACK_STEP_DEG;
-        g_tilt_deg = servo_clamp_deg(next_tilt);
+        int32_t step = (int32_t)SERVO_TRACK_STEP_DEG * row_abs;
+        next_tilt = (int32_t)g_tilt_target_deg + ((row_pred > 0) ? step : -step);
+        g_tilt_target_deg = servo_clamp_deg(next_tilt);
         changed = true;
     }
 
-    if (!changed)
+    (void)changed;
+}
+
+/* Runs every SERVO_RAMP_PERIOD_MS. Nudges the current angle one small
+   step toward the target and pushes the new PWM value, so the servo
+   moves continuously rather than in whiplash jumps. */
+static void servo_ramp_tick(void)
+{
+    const int32_t step = (int32_t)SERVO_RAMP_STEP_DEG;
+    int32_t diff;
+    bool pan_changed = false;
+    bool tilt_changed = false;
+
+    diff = (int32_t)g_pan_target_deg - (int32_t)g_pan_deg;
+    if (diff > step)
     {
-        return;
+        g_pan_deg = servo_clamp_deg((int32_t)g_pan_deg + step);
+        pan_changed = true;
+    }
+    else if (diff < -step)
+    {
+        g_pan_deg = servo_clamp_deg((int32_t)g_pan_deg - step);
+        pan_changed = true;
+    }
+    else if (diff != 0)
+    {
+        g_pan_deg = g_pan_target_deg;
+        pan_changed = true;
     }
 
-    (void)servo_set_angle(&g_pwm_pan, g_pan_deg, SERVO_PAN_MIN_PULSE_US, SERVO_PAN_MAX_PULSE_US, SERVO_PAN_INVERT);
-    (void)servo_set_angle(&g_pwm_tilt, g_tilt_deg, SERVO_TILT_MIN_PULSE_US, SERVO_TILT_MAX_PULSE_US, SERVO_TILT_INVERT);
+    diff = (int32_t)g_tilt_target_deg - (int32_t)g_tilt_deg;
+    if (diff > step)
+    {
+        g_tilt_deg = servo_clamp_deg((int32_t)g_tilt_deg + step);
+        tilt_changed = true;
+    }
+    else if (diff < -step)
+    {
+        g_tilt_deg = servo_clamp_deg((int32_t)g_tilt_deg - step);
+        tilt_changed = true;
+    }
+    else if (diff != 0)
+    {
+        g_tilt_deg = g_tilt_target_deg;
+        tilt_changed = true;
+    }
+
+    if (pan_changed)
+    {
+        (void)servo_set_angle(&g_pwm_pan, g_pan_deg, SERVO_PAN_MIN_PULSE_US, SERVO_PAN_MAX_PULSE_US, SERVO_PAN_INVERT);
+    }
+    if (tilt_changed)
+    {
+        (void)servo_set_angle(&g_pwm_tilt, g_tilt_deg, SERVO_TILT_MIN_PULSE_US, SERVO_TILT_MAX_PULSE_US, SERVO_TILT_INVERT);
+    }
 }
 
 static void task_servo_ctrl(void *param)
@@ -390,7 +478,7 @@ static void task_servo_ctrl(void *param)
 
     for (;;)
     {
-        if (xQueueReceive(q_servo_ctrl, &msg, pdMS_TO_TICKS(SERVO_TRACK_PERIOD_MS)) == pdPASS)
+        if (xQueueReceive(q_servo_ctrl, &msg, pdMS_TO_TICKS(SERVO_RAMP_PERIOD_MS)) == pdPASS)
         {
             if (msg.cmd == SERVO_CTRL_CMD_SWEEP)
             {
@@ -401,26 +489,28 @@ static void task_servo_ctrl(void *param)
                 continue;
             }
 
+            /* Manual set-angle always wins: disable auto-tracking so the
+               tracker does not immediately overwrite the commanded angle. */
+            if ((msg.set_pan || msg.set_tilt) && g_servo_track_enabled)
+            {
+                g_servo_track_enabled = false;
+                task_print_info("Auto-tracking disabled (manual servo command)");
+            }
+
             if (msg.set_pan)
             {
-                g_pan_deg = servo_clamp_deg((int32_t)msg.pan_deg);
-                if (!servo_set_angle(&g_pwm_pan, g_pan_deg, SERVO_PAN_MIN_PULSE_US, SERVO_PAN_MAX_PULSE_US, SERVO_PAN_INVERT))
-                {
-                    task_print_error("Failed to update pan servo PWM");
-                }
+                g_pan_target_deg = servo_clamp_deg((int32_t)msg.pan_deg);
             }
 
             if (msg.set_tilt)
             {
-                g_tilt_deg = servo_clamp_deg((int32_t)msg.tilt_deg);
-                if (!servo_set_angle(&g_pwm_tilt, g_tilt_deg, SERVO_TILT_MIN_PULSE_US, SERVO_TILT_MAX_PULSE_US, SERVO_TILT_INVERT))
-                {
-                    task_print_error("Failed to update tilt servo PWM");
-                }
+                g_tilt_target_deg = servo_clamp_deg((int32_t)msg.tilt_deg);
             }
         }
 
+        /* Tracker self-rate-limits internally to SERVO_TRACK_PERIOD_MS. */
         servo_track_hottest_ir_point();
+        servo_ramp_tick();
     }
 }
 

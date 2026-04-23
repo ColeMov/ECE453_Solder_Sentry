@@ -14,8 +14,8 @@
 #include "main.h"
 #include "ece453_pins.h"
 
-/* IQS228B TOUT pin (touch output). Set this to the MCU GPIO you wired to TOUT. */
-#define IQS228B_TOUT_PIN    MOD_1_PIN_I2C_SCL  /* P9_0 */
+/* IQS228B TOUT pin (touch output). Per board pinout, CAPACITIVE_TOUCH → P9.4. */
+#define IQS228B_TOUT_PIN    MOD_1_PIN_IO_0  /* P9_4 */
 
 /* Set to 1 if IQS228B is configured Active High (touch = logic 1), 0 for Active Low */
 #define IQS228B_ACTIVE_HIGH (0)

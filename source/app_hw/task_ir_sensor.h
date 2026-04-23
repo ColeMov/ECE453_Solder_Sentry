@@ -111,6 +111,14 @@ bool amg8834_get_latest_grid(amg8834_grid_t *grid_out);
 /* Returns the hottest pixel location from the latest frame. */
 bool amg8834_get_hottest_pixel(uint32_t *row_out, uint32_t *col_out, float *temp_c_out);
 
+/* Returns the hottest pixel plus the frame mean — lets callers gate tracking
+   on real contrast instead of chasing sensor noise in a uniform scene. */
+bool amg8834_get_hottest_and_mean(uint32_t *row_out, uint32_t *col_out, float *temp_c_out, float *mean_c_out);
+
+/* Returns the latest frame's tick timestamp (for fresh-frame gating by
+   consumers like the servo tracker). Returns 0 if no frame has been captured. */
+TickType_t amg8834_get_latest_timestamp(void);
+
 /* Converts a 12-bit signed-magnitude sample to degC using the provided LSB. */
 float amg8834_convert_signed_mag12_to_celsius(uint16_t raw, float lsb_deg_c);
 

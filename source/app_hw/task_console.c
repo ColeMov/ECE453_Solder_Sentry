@@ -258,8 +258,7 @@ void task_console_rx(void *param)
 {
     BaseType_t xMoreDataToFollow;
 
-    /* Send the Clear Screen Escape Sequence*/
-    task_print("\x1b[2J\x1b[;H");
+    /* Preserve pre-scheduler boot logs; skip the clear-screen escape. */
     task_print("\n\r");
     task_print("********************************\n\r");
     task_print("* ECE453 Command Line Interface\n\r");

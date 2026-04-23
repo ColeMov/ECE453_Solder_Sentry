@@ -32,8 +32,8 @@ int main(void)
     /* Servos: start before IR so the tracker is ready when frames arrive */
     task_servo_ctrl_init();
 
-    /* I2C must be up before IR sensor task starts */
-    rslt = i2c_init(MODULE_SITE_1);
+    /* I2C must be up before IR sensor task starts (AMG8834 on Module 0: P10.0/P10.1). */
+    rslt = i2c_init(MODULE_SITE_0);
     if (rslt == CY_RSLT_SUCCESS)
     {
         task_ir_sensor_init();
@@ -45,7 +45,7 @@ int main(void)
 
 #ifdef COMPONENT_BLESS
     task_print_info("FW: COMPONENT_BLESS is ON");
-    task_ble_init();
+    /* task_ble_init(); */
 #else
     task_print_warning("BLE: COMPONENT_BLESS not enabled in build");
 #endif

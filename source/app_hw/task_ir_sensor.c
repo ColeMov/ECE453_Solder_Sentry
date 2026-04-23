@@ -108,6 +108,10 @@ static bool cli_append_temp(char *buffer, size_t buffer_len, size_t *used, float
 		(long)(abs_centi % 100));
 }
 
+/* cyhal treats 0 as "wait forever" — finite timeout lets the task recover
+   instead of wedging silently when the sensor/bus hangs. */
+#define AMG8834_I2C_TIMEOUT_MS  (50u)
+
 static cy_rslt_t amg8834_write_reg(uint8_t reg, uint8_t value)
 {
 	cy_rslt_t rslt;
@@ -120,7 +124,7 @@ static cy_rslt_t amg8834_write_reg(uint8_t reg, uint8_t value)
 		AMG8834_I2C_ADDR_DEFAULT,
 		write_buffer,
 		sizeof(write_buffer),
-		0,
+		AMG8834_I2C_TIMEOUT_MS,
 		true);
 
 	xSemaphoreGive(Semaphore_I2C);
@@ -138,7 +142,7 @@ static cy_rslt_t amg8834_read_reg(uint8_t reg, uint8_t *value)
 		AMG8834_I2C_ADDR_DEFAULT,
 		&reg,
 		1,
-		0,
+		AMG8834_I2C_TIMEOUT_MS,
 		false);
 
 	if (rslt == CY_RSLT_SUCCESS)
@@ -148,7 +152,7 @@ static cy_rslt_t amg8834_read_reg(uint8_t reg, uint8_t *value)
 			AMG8834_I2C_ADDR_DEFAULT,
 			value,
 			1,
-			0,
+			AMG8834_I2C_TIMEOUT_MS,
 			true);
 	}
 
@@ -167,7 +171,7 @@ static cy_rslt_t amg8834_read_block(uint8_t start_reg, uint8_t *buffer, uint16_t
 		AMG8834_I2C_ADDR_DEFAULT,
 		&start_reg,
 		1,
-		0,
+		AMG8834_I2C_TIMEOUT_MS,
 		false);
 
 	if (rslt == CY_RSLT_SUCCESS)
@@ -177,7 +181,7 @@ static cy_rslt_t amg8834_read_block(uint8_t start_reg, uint8_t *buffer, uint16_t
 			AMG8834_I2C_ADDR_DEFAULT,
 			buffer,
 			len,
-			0,
+			AMG8834_I2C_TIMEOUT_MS,
 			true);
 	}
 
@@ -202,7 +206,8 @@ static cy_rslt_t amg8834_init_device(amg8834_fps_t fps)
 		return rslt;
 	}
 
-	vTaskDelay(pdMS_TO_TICKS(5));
+	/* Datasheet: 50 ms setup time before comms work reliably post-reset. */
+	vTaskDelay(pdMS_TO_TICKS(50));
 
 	rslt = amg8834_write_reg((uint8_t)AMG8834_REG_INTC, 0x00);
 	if (rslt != CY_RSLT_SUCCESS)
@@ -428,7 +433,7 @@ void task_ir_sensor_init(void)
 {
 	if (Semaphore_I2C == NULL)
 	{
-		task_print_error("AMG8834 init requires i2c_init(MODULE_SITE_1) before scheduler start");
+		task_print_error("AMG8834 init requires i2c_init(MODULE_SITE_0) before scheduler start");
 		return;
 	}
 
@@ -469,7 +474,15 @@ bool amg8834_get_latest_grid(amg8834_grid_t *grid_out)
 	return have_frame;
 }
 
+bool amg8834_get_hottest_and_mean(uint32_t *row_out, uint32_t *col_out, float *temp_c_out, float *mean_c_out);
+
 bool amg8834_get_hottest_pixel(uint32_t *row_out, uint32_t *col_out, float *temp_c_out)
+{
+	float unused_mean;
+	return amg8834_get_hottest_and_mean(row_out, col_out, temp_c_out, &unused_mean);
+}
+
+bool amg8834_get_hottest_and_mean(uint32_t *row_out, uint32_t *col_out, float *temp_c_out, float *mean_c_out)
 {
 	bool have_frame;
 	uint32_t row;
@@ -477,8 +490,9 @@ bool amg8834_get_hottest_pixel(uint32_t *row_out, uint32_t *col_out, float *temp
 	uint32_t max_row = 0;
 	uint32_t max_col = 0;
 	float max_temp = 0.0f;
+	float sum = 0.0f;
 
-	if ((row_out == NULL) || (col_out == NULL) || (temp_c_out == NULL) || (g_ir_frame_mutex == NULL))
+	if ((row_out == NULL) || (col_out == NULL) || (temp_c_out == NULL) || (mean_c_out == NULL) || (g_ir_frame_mutex == NULL))
 	{
 		return false;
 	}
@@ -493,6 +507,7 @@ bool amg8834_get_hottest_pixel(uint32_t *row_out, uint32_t *col_out, float *temp
 			for (col = 0; col < AMG8834_COLS; col++)
 			{
 				float temp = g_ir_latest_grid.pixels_c[row][col];
+				sum += temp;
 				if (temp > max_temp)
 				{
 					max_temp = temp;
@@ -512,8 +527,63 @@ bool amg8834_get_hottest_pixel(uint32_t *row_out, uint32_t *col_out, float *temp
 	*row_out = max_row;
 	*col_out = max_col;
 	*temp_c_out = max_temp;
+	*mean_c_out = sum / (float)AMG8834_PIXEL_COUNT;
 
 	return true;
+}
+
+TickType_t amg8834_get_latest_timestamp(void)
+{
+	TickType_t ts = 0;
+	if (g_ir_frame_mutex == NULL)
+	{
+		return 0;
+	}
+	xSemaphoreTake(g_ir_frame_mutex, portMAX_DELAY);
+	if (g_ir_frame_valid)
+	{
+		ts = g_ir_latest_grid.timestamp_ticks;
+	}
+	xSemaphoreGive(g_ir_frame_mutex);
+	return ts;
+}
+
+#define AMG8834_CHUNK_BYTES      (8u)
+#define AMG8834_RETRY_COUNT      (3u)
+#define AMG8834_INTER_CHUNK_MS   (1u)
+
+static cy_rslt_t amg8834_read_block_retry(uint8_t start_reg, uint8_t *buffer, uint16_t len)
+{
+	cy_rslt_t rslt = CY_RSLT_SUCCESS;
+	uint16_t offset = 0u;
+
+	while (offset < len)
+	{
+		uint16_t chunk = (uint16_t)((len - offset) > AMG8834_CHUNK_BYTES
+		                            ? AMG8834_CHUNK_BYTES
+		                            : (len - offset));
+		uint32_t attempt;
+		for (attempt = 0u; attempt < AMG8834_RETRY_COUNT; attempt++)
+		{
+			rslt = amg8834_read_block((uint8_t)(start_reg + offset),
+			                          &buffer[offset], chunk);
+			if (rslt == CY_RSLT_SUCCESS)
+			{
+				break;
+			}
+			(void)i2c_reset_bus();
+			vTaskDelay(pdMS_TO_TICKS(2));
+		}
+		if (rslt != CY_RSLT_SUCCESS)
+		{
+			return rslt;
+		}
+		offset = (uint16_t)(offset + chunk);
+		/* Let the AMG8834's internal state machine breathe between bursts. */
+		vTaskDelay(pdMS_TO_TICKS(AMG8834_INTER_CHUNK_MS));
+	}
+
+	return CY_RSLT_SUCCESS;
 }
 
 cy_rslt_t amg8834_read_frame(amg8834_frame_t *frame)
@@ -528,13 +598,13 @@ cy_rslt_t amg8834_read_frame(amg8834_frame_t *frame)
 		return CY_RSLT_TYPE_ERROR;
 	}
 
-	rslt = amg8834_read_block((uint8_t)AMG8834_REG_TTHL, therm_raw, sizeof(therm_raw));
+	rslt = amg8834_read_block_retry((uint8_t)AMG8834_REG_TTHL, therm_raw, sizeof(therm_raw));
 	if (rslt != CY_RSLT_SUCCESS)
 	{
 		return rslt;
 	}
 
-	rslt = amg8834_read_block((uint8_t)AMG8834_REG_PIXEL_OFFSET, pixel_raw, sizeof(pixel_raw));
+	rslt = amg8834_read_block_retry((uint8_t)AMG8834_REG_PIXEL_OFFSET, pixel_raw, sizeof(pixel_raw));
 	if (rslt != CY_RSLT_SUCCESS)
 	{
 		return rslt;
@@ -547,9 +617,13 @@ cy_rslt_t amg8834_read_frame(amg8834_frame_t *frame)
 		frame->thermistor_c = amg8834_convert_signed_mag12_to_celsius(raw, AMG8834_THERM_LSB_DEGC);
 	}
 
+	/* Datasheet pixel map: pixel 1 (reg 0x80) is bottom-right, pixel 64 is top-left.
+	   Reverse the linear order so downstream indexing is normal camera view
+	   (idx 0 = top-left, idx 63 = bottom-right). */
 	for (i = 0; i < AMG8834_PIXEL_COUNT; i++)
 	{
-		uint16_t raw = ((uint16_t)(pixel_raw[(2u * i) + 1u] & 0x0Fu) << 8) | pixel_raw[2u * i];
+		uint32_t raw_idx = (uint32_t)(AMG8834_PIXEL_COUNT - 1u) - i;
+		uint16_t raw = ((uint16_t)(pixel_raw[(2u * raw_idx) + 1u] & 0x0Fu) << 8) | pixel_raw[2u * raw_idx];
 		frame->pixels_c[i] = amg8834_convert_signed_mag12_to_celsius(raw, AMG8834_PIXEL_LSB_DEGC);
 	}
 

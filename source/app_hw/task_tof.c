@@ -25,7 +25,7 @@ void task_tof_init(void)
 {
     cy_rslt_t rslt;
 
-    rslt = i2c_init(MODULE_SITE_0);
+    rslt = i2c_init(MODULE_SITE_2);
     if (rslt != CY_RSLT_SUCCESS)
     {
         task_print_error("ToF: I2C init failed (0x%08lx)", (unsigned long)rslt);
@@ -58,8 +58,8 @@ static cy_rslt_t tof_gpio_init(void)
 {
     cy_rslt_t rslt;
 
-    // XSHUT (Module IO_0) controls sensor reset.
-    rslt = cyhal_gpio_init(MOD_0_PIN_IO_0, CYHAL_GPIO_DIR_OUTPUT,
+    // XSHUT (Module 2 IO_0 = P12.6) controls sensor reset.
+    rslt = cyhal_gpio_init(MOD_2_PIN_IO_0, CYHAL_GPIO_DIR_OUTPUT,
                            CYHAL_GPIO_DRIVE_STRONG, 0);
     if (rslt != CY_RSLT_SUCCESS)
     {
@@ -68,11 +68,11 @@ static cy_rslt_t tof_gpio_init(void)
 
     // Hold in reset briefly, then release.
     cyhal_system_delay_ms(TOF_XSHUT_HOLD_MS);
-    cyhal_gpio_write(MOD_0_PIN_IO_0, 1);
+    cyhal_gpio_write(MOD_2_PIN_IO_0, 1);
     cyhal_system_delay_ms(TOF_XSHUT_HOLD_MS);
 
-    // GPIO1 (Module IO_1) is the sensor interrupt output.
-    rslt = cyhal_gpio_init(MOD_0_PIN_IO_1, CYHAL_GPIO_DIR_INPUT,
+    // GPIO1 (Module 2 IO_1 = P12.7) is the sensor interrupt output.
+    rslt = cyhal_gpio_init(MOD_2_PIN_IO_1, CYHAL_GPIO_DIR_INPUT,
                            CYHAL_GPIO_DRIVE_PULLDOWN, 0);
     if (rslt != CY_RSLT_SUCCESS)
     {

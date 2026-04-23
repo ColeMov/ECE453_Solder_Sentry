@@ -216,7 +216,7 @@ VL53LX_Error VL53LX_GpioSetMode(uint8_t pin, uint8_t mode)
 VL53LX_Error VL53LX_GpioSetValue(uint8_t pin, uint8_t value)
 {
     (void)pin;
-    cyhal_gpio_write(MOD_0_PIN_IO_0, value ? 1 : 0);
+    cyhal_gpio_write(MOD_2_PIN_IO_0, value ? 1 : 0);
     return VL53LX_ERROR_NONE;
 }
 
@@ -227,13 +227,13 @@ VL53LX_Error VL53LX_GpioGetValue(uint8_t pin, uint8_t *pvalue)
     {
         return VL53LX_ERROR_INVALID_PARAMS;
     }
-    *pvalue = cyhal_gpio_read(MOD_0_PIN_IO_1) ? 1 : 0;
+    *pvalue = cyhal_gpio_read(MOD_2_PIN_IO_1) ? 1 : 0;
     return VL53LX_ERROR_NONE;
 }
 
 VL53LX_Error VL53LX_GpioXshutdown(uint8_t value)
 {
-    cyhal_gpio_write(MOD_0_PIN_IO_0, value ? 1 : 0);
+    cyhal_gpio_write(MOD_2_PIN_IO_0, value ? 1 : 0);
     return VL53LX_ERROR_NONE;
 }
 
