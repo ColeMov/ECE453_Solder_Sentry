@@ -143,7 +143,7 @@ static void ble_event_handler(uint32_t eventCode, void *eventParam)
             ble_conn_handle = *(cy_stc_ble_conn_handle_t *)eventParam;
             ble_connected = true;
             task_print_info("BLE: GATT connected");
-            (void)task_audio_say("connected");
+            (void)task_audio_say("success_chime");
             break;
 
         case CY_BLE_EVT_GAP_DEVICE_CONNECTED:

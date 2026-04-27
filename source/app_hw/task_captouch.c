@@ -38,7 +38,7 @@ static void captouch_on_long_press(uint32_t held_ms)
 {
     task_print_info("CapTouch: long press (%lu ms) — entering pairing mode",
                     (unsigned long)held_ms);
-    (void)task_audio_say("pairing_on");
+    (void)task_audio_say("pairing_chime");
 #ifdef COMPONENT_BLESS
     task_ble_force_pairing_mode();
 #endif

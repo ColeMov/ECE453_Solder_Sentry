@@ -90,11 +90,13 @@ static const struct {
     const int16_t  *pcm;
     uint32_t        len;
 } g_audio_clips[] = {
-    { "pairing_on",   pairing_on_pcm,   PAIRING_ON_PCM_LEN   },
-    { "pairing_off",  pairing_off_pcm,  PAIRING_OFF_PCM_LEN  },
-    { "connected",    connected_pcm,    CONNECTED_PCM_LEN    },
-    { "disconnected", disconnected_pcm, DISCONNECTED_PCM_LEN },
-    { "too_close",    too_close_pcm,    TOO_CLOSE_PCM_LEN    },
+    { "pairing_on",     pairing_on_pcm,     PAIRING_ON_PCM_LEN     },
+    { "pairing_off",    pairing_off_pcm,    PAIRING_OFF_PCM_LEN    },
+    { "connected",      connected_pcm,      CONNECTED_PCM_LEN      },
+    { "disconnected",   disconnected_pcm,   DISCONNECTED_PCM_LEN   },
+    { "too_close",      too_close_pcm,      TOO_CLOSE_PCM_LEN      },
+    { "pairing_chime",  pairing_chime_pcm,  PAIRING_CHIME_PCM_LEN  },
+    { "success_chime",  success_chime_pcm,  SUCCESS_CHIME_PCM_LEN  },
 };
 #define AUDIO_CLIP_COUNT (sizeof(g_audio_clips) / sizeof(g_audio_clips[0]))
 
