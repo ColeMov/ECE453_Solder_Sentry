@@ -9,6 +9,7 @@
 
 #include "task_console.h"
 #include "task_ir_sensor.h"
+#include "task_audio.h"
 #include "cy_ble_clk.h"
 #include "cy_sysint.h"
 #include <string.h>
@@ -97,6 +98,19 @@ static void ble_start_advertising_fast(void)
     }
 }
 
+void task_ble_force_pairing_mode(void)
+{
+    if (!ble_stack_on)
+    {
+        task_print_warning("BLE: pairing-mode requested before stack ready");
+        return;
+    }
+    task_print_info("BLE: entering pairing mode (restart FAST adv)");
+    /* INVALID_OPERATION returned if not currently advertising — ignore. */
+    (void)Cy_BLE_GAPP_StopAdvertisement();
+    ble_start_advertising_fast();
+}
+
 static void ble_event_handler(uint32_t eventCode, void *eventParam)
 {
     switch (eventCode)
@@ -129,6 +143,7 @@ static void ble_event_handler(uint32_t eventCode, void *eventParam)
             ble_conn_handle = *(cy_stc_ble_conn_handle_t *)eventParam;
             ble_connected = true;
             task_print_info("BLE: GATT connected");
+            (void)task_audio_say("connected");
             break;
 
         case CY_BLE_EVT_GAP_DEVICE_CONNECTED:
@@ -154,8 +169,8 @@ static void ble_event_handler(uint32_t eventCode, void *eventParam)
         case CY_BLE_EVT_GAP_DEVICE_DISCONNECTED:
             ble_connected = false;
             notifications_enabled = false;
-            ble_start_advertising_fast();
-            task_print_info("BLE: disconnected, re-advertising");
+            task_print_info("BLE: disconnected (no auto re-advertise; long-press captouch to re-pair)");
+            (void)task_audio_say("disconnected");
             break;
 
         case CY_BLE_EVT_GAPP_ADVERTISEMENT_START_STOP:
@@ -163,8 +178,9 @@ static void ble_event_handler(uint32_t eventCode, void *eventParam)
             break;
 
         case CY_BLE_EVT_TIMEOUT:
-            task_print_warning("BLE: timeout event, retrying FAST advertising");
-            ble_start_advertising_fast();
+            /* Don't auto-restart advertising — only the long-press captouch
+             * trigger should put us back into pairing mode. */
+            task_print_info("BLE: timeout (advertisement window ended)");
             break;
 
         case CY_BLE_EVT_GATTS_WRITE_REQ:
@@ -371,16 +387,11 @@ static void task_ble(void *param)
     {
         Cy_BLE_ProcessEvents();
         heartbeat_ms += 5u;
-        if (heartbeat_ms >= 10000u)
-        {
-            heartbeat_ms = 0u;
-            /* Retry advertising if disconnected */
-            if (!ble_connected && ble_stack_on &&
-                (Cy_BLE_GetAdvertisementState() == CY_BLE_ADV_STATE_STOPPED))
-            {
-                ble_start_advertising_fast();
-            }
-        }
+        /* Heartbeat retry of advertising removed on purpose: pairing mode
+         * is now strictly long-press driven via task_ble_force_pairing_mode().
+         * Once a connection drops, the board stays quiet until the user
+         * holds the captouch pad. */
+        (void)heartbeat_ms;
 
         /* Forward console log messages */
         ble_tx_item_t item;

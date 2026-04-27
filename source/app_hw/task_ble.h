@@ -81,6 +81,9 @@ extern volatile uint32_t g_ble_diag_state;
  */
 void task_ble_init(void);
 
+/* Restart fast advertising — used as the long-press pairing trigger. */
+void task_ble_force_pairing_mode(void);
+
 #endif /* COMPONENT_BLESS */
 
 #endif /* __TASK_BLE_H__ */

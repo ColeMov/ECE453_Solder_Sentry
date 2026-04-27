@@ -13,6 +13,7 @@
 #include "task_console.h"
 #include "task_blink.h"
 #include "task_ble.h"
+#include "task_audio.h"
 #include "ece453_pins.h"
 
 #include "cyhal_gpio.h"
@@ -20,6 +21,28 @@
 #define CAPTOUCH_POLL_MS         (50u)
 #define CAPTOUCH_DEBOUNCE_COUNT  (2u)  /* Consecutive same readings before accepting */
 #define CAPTOUCH_RAW_LOG_MS      (2000u)
+
+/* Press classification */
+#define CAPTOUCH_SHORT_TAP_MAX_MS  (600u)
+#define CAPTOUCH_LONG_HOLD_MIN_MS  (1500u)
+
+static void captouch_on_short_press(uint32_t held_ms);
+static void captouch_on_long_press(uint32_t held_ms);
+
+static void captouch_on_short_press(uint32_t held_ms)
+{
+    task_print_info("CapTouch: short press (%lu ms)", (unsigned long)held_ms);
+}
+
+static void captouch_on_long_press(uint32_t held_ms)
+{
+    task_print_info("CapTouch: long press (%lu ms) — entering pairing mode",
+                    (unsigned long)held_ms);
+    (void)task_audio_say("pairing_on");
+#ifdef COMPONENT_BLESS
+    task_ble_force_pairing_mode();
+#endif
+}
 
 static void task_captouch(void *param);
 
@@ -67,6 +90,8 @@ static void task_captouch(void *param)
     bool stable_touched = false;
     uint32_t stable_count = 0;
     uint32_t raw_log_ticks = 0;
+    uint32_t press_start_ms = 0;
+    uint32_t now_ms = 0;
 
     (void)param;
 
@@ -112,17 +137,32 @@ static void task_captouch(void *param)
         if ((stable_count >= CAPTOUCH_DEBOUNCE_COUNT) && (stable_touched != touched))
         {
             stable_touched = touched;
+            now_ms = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
             if (stable_touched)
             {
                 /* active-low LED: 0 = ON */
                 cyhal_gpio_write(PIN_LED, 0u);
-                task_print_info("CapTouch: Copper pad TOUCHED! LED ON");
+                press_start_ms = now_ms;
+                task_print_info("CapTouch: pressed");
             }
             else
             {
                 /* active-low LED: 1 = OFF */
                 cyhal_gpio_write(PIN_LED, 1u);
-                task_print_info("CapTouch: Copper pad released");
+                uint32_t held_ms = now_ms - press_start_ms;
+                task_print_info("CapTouch: released after %lu ms", (unsigned long)held_ms);
+
+                if (held_ms <= CAPTOUCH_SHORT_TAP_MAX_MS)
+                {
+                    captouch_on_short_press(held_ms);
+                }
+                else if (held_ms >= CAPTOUCH_LONG_HOLD_MIN_MS)
+                {
+                    captouch_on_long_press(held_ms);
+                }
+                /* Anything between SHORT_TAP_MAX and LONG_HOLD_MIN is a
+                 * deliberate deadband to avoid mis-classifying jittery
+                 * holds. Ignored. */
             }
         }
 

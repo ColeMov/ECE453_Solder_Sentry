@@ -17,6 +17,7 @@
 #include "source/app_hw/task_servo_ctrl.h"
 #include "source/app_hw/task_fan.h"
 #include "source/app_hw/task_audio.h"
+#include "source/app_hw/task_captouch.h"
 
 int main(void)
 {
@@ -37,10 +38,14 @@ int main(void)
     /* Fan: PWM on P10.2 (TACH on P10.3 wired but not read yet) */
     task_fan_init();
 
-    /* Audio amp (TAS54414) on Module Site 1 (P9.0/P9.1 I2C). Bring-up only:
-     * registers `audio` CLI for I2C bus probing. Heavy lifting happens in a
-     * deferred FreeRTOS task so a stuck bus can't hang boot. */
+    /* Audio amp (TAS5441) on Module Site 1 (P9.0/P9.1 I2C, P9.6 DAC).
+     * Heavy lifting happens in a deferred FreeRTOS task so a stuck bus
+     * can't hang boot. */
     task_audio_init();
+
+    /* Capacitive touch sensor (IQS228B) on P9.4. Polls TOUT, classifies
+     * short tap vs long hold, dispatches to handlers in task_captouch.c. */
+    task_captouch_init();
 
     /* I2C must be up before IR sensor task starts (AMG8834 on Module 0: P10.0/P10.1). */
     rslt = i2c_init(MODULE_SITE_0);

@@ -10,4 +10,10 @@
 
 void task_audio_init(void);
 
+/* Trigger playback of a stored voice prompt by name. Names match the
+ * keys passed to wav_to_c.py (e.g. "pairing_on", "connected"). Safe to
+ * call from any task; spawns a one-shot playback task. Returns true if
+ * a clip was queued, false if name unknown or DAC not ready. */
+bool task_audio_say(const char *clip_name);
+
 #endif /* __TASK_AUDIO_H__ */

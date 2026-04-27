@@ -84,6 +84,20 @@ static void task_audio_play(void *param)
     vTaskDelete(NULL);
 }
 
+/* Lookup table — single source of truth for clip name → PCM data. */
+static const struct {
+    const char     *name;
+    const int16_t  *pcm;
+    uint32_t        len;
+} g_audio_clips[] = {
+    { "pairing_on",   pairing_on_pcm,   PAIRING_ON_PCM_LEN   },
+    { "pairing_off",  pairing_off_pcm,  PAIRING_OFF_PCM_LEN  },
+    { "connected",    connected_pcm,    CONNECTED_PCM_LEN    },
+    { "disconnected", disconnected_pcm, DISCONNECTED_PCM_LEN },
+    { "too_close",    too_close_pcm,    TOO_CLOSE_PCM_LEN    },
+};
+#define AUDIO_CLIP_COUNT (sizeof(g_audio_clips) / sizeof(g_audio_clips[0]))
+
 static cy_rslt_t audio_dispatch_clip(const int16_t *pcm, uint32_t len, const char *name)
 {
     if (!g_audio_dac_ready)
@@ -253,27 +267,10 @@ static BaseType_t cli_handler_audio(char *pcWriteBuffer,
                      "audio say <pairing_on|pairing_off|connected|disconnected|too_close>\r\n");
             return pdFALSE;
         }
-
-        struct { const char *n; const int16_t *pcm; uint32_t len; } table[] = {
-            { "pairing_on",   pairing_on_pcm,   PAIRING_ON_PCM_LEN   },
-            { "pairing_off",  pairing_off_pcm,  PAIRING_OFF_PCM_LEN  },
-            { "connected",    connected_pcm,    CONNECTED_PCM_LEN    },
-            { "disconnected", disconnected_pcm, DISCONNECTED_PCM_LEN },
-            { "too_close",    too_close_pcm,    TOO_CLOSE_PCM_LEN    },
-        };
-        for (size_t k = 0; k < sizeof(table) / sizeof(table[0]); k++)
-        {
-            if (strncmp(p_name, table[k].n, strlen(table[k].n)) == 0)
-            {
-                cy_rslt_t r = audio_dispatch_clip(table[k].pcm, table[k].len, table[k].n);
-                snprintf(pcWriteBuffer, xWriteBufferLen,
-                         "audio: say %s -> 0x%08lX (%lu samples)\r\n",
-                         table[k].n, (unsigned long)r, (unsigned long)table[k].len);
-                return pdFALSE;
-            }
-        }
+        bool ok = task_audio_say(p_name);
         snprintf(pcWriteBuffer, xWriteBufferLen,
-                 "audio: unknown clip '%s'\r\n", p_name);
+                 "audio: say %s -> %s\r\n",
+                 p_name, ok ? "queued" : "unknown clip or DAC not ready");
         return pdFALSE;
     }
 
@@ -463,6 +460,24 @@ static void task_audio(void *param)
     task_print_info("audio: DAC up on P9.6, parked mid-rail; type 'audio tone'");
 
     vTaskDelete(NULL);
+}
+
+bool task_audio_say(const char *clip_name)
+{
+    if (clip_name == NULL || !g_audio_dac_ready)
+    {
+        return false;
+    }
+    for (size_t k = 0u; k < AUDIO_CLIP_COUNT; k++)
+    {
+        if (strcmp(g_audio_clips[k].name, clip_name) == 0)
+        {
+            return audio_dispatch_clip(g_audio_clips[k].pcm,
+                                       g_audio_clips[k].len,
+                                       g_audio_clips[k].name) == CY_RSLT_SUCCESS;
+        }
+    }
+    return false;
 }
 
 void task_audio_init(void)
