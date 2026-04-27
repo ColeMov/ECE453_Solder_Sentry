@@ -43,6 +43,7 @@
  ******************************************************************************/
 #include "task_console.h"
 #include "task_ble.h"
+#include "FreeRTOS_CLI.h"
 #include <string.h>
 
 //*******************************************************************************
@@ -410,6 +411,26 @@ void hw_console_init(void)
  *  messages.
  *
  *******************************************************************************/
+static BaseType_t cli_handler_ble_reset(char *pcWriteBuffer,
+                                        size_t xWriteBufferLen,
+                                        const char *pcCommandString)
+{
+    (void)pcCommandString;
+    configASSERT(pcWriteBuffer);
+    snprintf(pcWriteBuffer, xWriteBufferLen, "Resetting MCU...\r\n");
+    vTaskDelay(pdMS_TO_TICKS(50u));
+    NVIC_SystemReset();
+    return pdFALSE;
+}
+
+static const CLI_Command_Definition_t xBleReset =
+{
+    "ble_reset",
+    "\r\nble_reset : full MCU reset (mirrors hardware reset button)\r\n",
+    cli_handler_ble_reset,
+    0
+};
+
 void task_console_init(void)
 {
     hw_console_init();
@@ -417,6 +438,8 @@ void task_console_init(void)
     // Set up the Queue for task_console_tx
     q_console_tx = xQueueCreate(DEBUG_QUEUE_SIZE,
                                    sizeof(debug_message_data_t));
+
+    FreeRTOS_CLIRegisterCommand(&xBleReset);
 
 
     // Create the transmit task
