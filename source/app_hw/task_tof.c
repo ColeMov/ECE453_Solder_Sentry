@@ -4,6 +4,7 @@
 #include "task_blink.h"
 #include "i2c.h"
 #include "ece453_pins.h"
+#include "app_state.h"
 
 #include "vl53lx_api.h"
 #include "vl53lx_def.h"
@@ -174,7 +175,9 @@ static void task_tof(void *param)
         if (near && !last_near)
         {
             cyhal_gpio_write(PIN_LED, 0); /* active-low: 0 = ON */
-            task_print_info("ToF: object detected (%d mm)", data.RangeData[0].RangeMilliMeter);
+            task_print_info("ToF: object detected (%d mm) — switching system OFF",
+                            data.RangeData[0].RangeMilliMeter);
+            app_state_set_active(false);
         }
         else if (!near && last_near)
         {

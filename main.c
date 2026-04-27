@@ -15,6 +15,9 @@
 #include "source/app_hw/i2c.h"
 #include "source/app_hw/task_ir_sensor.h"
 #include "source/app_hw/task_servo_ctrl.h"
+#include "source/app_hw/task_dc_motor.h"
+#include "source/app_hw/task_tof.h"
+#include "source/app_hw/task_captouch.h"
 
 int main(void)
 {
@@ -31,8 +34,10 @@ int main(void)
 
     /* Servos: start before IR so the tracker is ready when frames arrive */
     task_servo_ctrl_init();
+    task_dc_motor_init();
+    task_tof_init();
 
-    /* I2C must be up before IR sensor task starts */
+    /* I2C site 1 uses P9_0 (SCL) / P9_1 (SDA). Do not use those pins for GPIO (e.g. cap touch). */
     rslt = i2c_init(MODULE_SITE_1);
     if (rslt == CY_RSLT_SUCCESS)
     {
@@ -49,6 +54,8 @@ int main(void)
 #else
     task_print_warning("BLE: COMPONENT_BLESS not enabled in build");
 #endif
+
+    task_captouch_init();
 
     /* Start the FreeRTOS scheduler */
     vTaskStartScheduler();

@@ -50,6 +50,7 @@ static cyhal_pwm_t g_pwm_tilt;
 static uint16_t g_pan_deg = SERVO_DEFAULT_PAN_DEG;
 static uint16_t g_tilt_deg = SERVO_DEFAULT_TILT_DEG;
 static bool g_servo_track_enabled = SERVO_TRACK_IR_ENABLE;
+static volatile bool g_servo_motion_enabled = true;
 
 static const CLI_Command_Definition_t xServoPan =
 {
@@ -392,6 +393,11 @@ static void task_servo_ctrl(void *param)
     {
         if (xQueueReceive(q_servo_ctrl, &msg, pdMS_TO_TICKS(SERVO_TRACK_PERIOD_MS)) == pdPASS)
         {
+            if (!g_servo_motion_enabled)
+            {
+                continue;
+            }
+
             if (msg.cmd == SERVO_CTRL_CMD_SWEEP)
             {
                 if (!servo_run_sweep(&msg))
@@ -420,7 +426,10 @@ static void task_servo_ctrl(void *param)
             }
         }
 
-        servo_track_hottest_ir_point();
+        if (g_servo_motion_enabled)
+        {
+            servo_track_hottest_ir_point();
+        }
     }
 }
 
@@ -778,4 +787,15 @@ void task_servo_ctrl_init(void)
                     (unsigned long)SERVO_TILT_MAX_PULSE_US,
                     (unsigned int)SERVO_TILT_INVERT);
     task_print_info("Servo auto-tracking: %s", g_servo_track_enabled ? "ON" : "OFF");
+}
+
+void task_servo_set_motion_enabled(bool enabled)
+{
+    g_servo_motion_enabled = enabled;
+    task_print_info("Servo motion %s", enabled ? "ENABLED" : "DISABLED");
+}
+
+bool task_servo_is_motion_enabled(void)
+{
+    return g_servo_motion_enabled;
 }

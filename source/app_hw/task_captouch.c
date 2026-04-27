@@ -12,7 +12,7 @@
 #include "task_captouch.h"
 #include "task_console.h"
 #include "task_blink.h"
-#include "task_ble.h"
+#include "app_state.h"
 #include "ece453_pins.h"
 
 #include "cyhal_gpio.h"
@@ -57,7 +57,7 @@ void task_captouch_init(void)
         configMAX_PRIORITIES - 7,
         NULL);
 
-    task_print_info("CapTouch: IQS228B touch detection started (TOUT -> P9_0)");
+    task_print_info("CapTouch: IQS228B touch detection started (TOUT -> P10_0)");
     task_print_info("CapTouch: mode=%s", IQS228B_ACTIVE_HIGH ? "Active-High" : "Active-Low");
 }
 
@@ -65,10 +65,12 @@ static void task_captouch(void *param)
 {
     bool last_sample_touched = false;
     bool stable_touched = false;
+    bool led_on = false;
     uint32_t stable_count = 0;
     uint32_t raw_log_ticks = 0;
 
     (void)param;
+    app_state_set_active(false);
 
     while (1)
     {
@@ -82,16 +84,11 @@ static void task_captouch(void *param)
 #endif
         if (raw_log_ticks >= CAPTOUCH_RAW_LOG_MS)
         {
-            task_print_info("CapTouch[BLEDBG][BLEC=%u][BLES=%lu]: raw TOUT=%lu | touched_if_active_high=%u touched_if_active_low=%u",
-#ifdef COMPONENT_BLESS
-                            1u,
-#else
-                            0u,
-#endif
-                            (unsigned long)g_ble_diag_state,
-                            (unsigned long)level,
-                            (level != 0) ? 1u : 0u,
-                            (level == 0) ? 1u : 0u);
+            task_print_info(
+                "CapTouch: raw TOUT=%lu touched=%u (active_high=%u)",
+                (unsigned long)level,
+                touched ? 1u : 0u,
+                IQS228B_ACTIVE_HIGH ? 1u : 0u);
             raw_log_ticks = 0;
         }
 
@@ -114,14 +111,15 @@ static void task_captouch(void *param)
             stable_touched = touched;
             if (stable_touched)
             {
-                /* active-low LED: 0 = ON */
-                cyhal_gpio_write(PIN_LED, 0u);
-                task_print_info("CapTouch: Copper pad TOUCHED! LED ON");
+                /* Toggle system on/off state on each debounced press. */
+                bool new_active = !app_state_is_active();
+                app_state_set_active(new_active);
+                led_on = new_active;
+                cyhal_gpio_write(PIN_LED, led_on ? 0u : 1u);
+                task_print_info("CapTouch: press -> System %s", led_on ? "ON" : "OFF");
             }
             else
             {
-                /* active-low LED: 1 = OFF */
-                cyhal_gpio_write(PIN_LED, 1u);
                 task_print_info("CapTouch: Copper pad released");
             }
         }

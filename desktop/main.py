@@ -15,7 +15,7 @@ import queue
 import sys
 import numpy as np
 import matplotlib
-matplotlib.use("TkAgg")
+matplotlib.use("QtAgg")
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 from matplotlib.colors import Normalize

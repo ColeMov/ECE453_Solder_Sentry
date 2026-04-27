@@ -14,8 +14,10 @@
 #include "main.h"
 #include "ece453_pins.h"
 
-/* IQS228B TOUT pin (touch output). Set this to the MCU GPIO you wired to TOUT. */
-#define IQS228B_TOUT_PIN    MOD_1_PIN_I2C_SCL  /* P9_0 */
+/* IQS228B TOUT pin (touch output). Must NOT share a pin with active I2C/UART.
+ * main.c uses i2c_init(MODULE_SITE_1) -> SCL=P9_0, SDA=P9_1. Do not use P9_0/P9_1
+ * for TOUT while that bus is in use. Default: P10_0 (free when site-1 I2C is used). */
+#define IQS228B_TOUT_PIN    P10_0
 
 /* Set to 1 if IQS228B is configured Active High (touch = logic 1), 0 for Active Low */
 #define IQS228B_ACTIVE_HIGH (0)

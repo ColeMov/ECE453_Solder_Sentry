@@ -70,5 +70,7 @@ typedef struct
 extern QueueHandle_t q_servo_ctrl;
 
 void task_servo_ctrl_init(void);
+void task_servo_set_motion_enabled(bool enabled);
+bool task_servo_is_motion_enabled(void);
 
 #endif
