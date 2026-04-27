@@ -16,6 +16,7 @@
 #include "source/app_hw/task_ir_sensor.h"
 #include "source/app_hw/task_servo_ctrl.h"
 #include "source/app_hw/task_fan.h"
+#include "source/app_hw/task_audio.h"
 
 int main(void)
 {
@@ -35,6 +36,11 @@ int main(void)
 
     /* Fan: PWM on P10.2 (TACH on P10.3 wired but not read yet) */
     task_fan_init();
+
+    /* Audio amp (TAS54414) on Module Site 1 (P9.0/P9.1 I2C). Bring-up only:
+     * registers `audio` CLI for I2C bus probing. Heavy lifting happens in a
+     * deferred FreeRTOS task so a stuck bus can't hang boot. */
+    task_audio_init();
 
     /* I2C must be up before IR sensor task starts (AMG8834 on Module 0: P10.0/P10.1). */
     rslt = i2c_init(MODULE_SITE_0);
