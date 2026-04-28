@@ -1,5 +1,11 @@
 #include "task_servo_ctrl.h"
 #include "task_ir_sensor.h"
+#include "task_fan.h"
+
+/* Auto-fan: kill the fan after this long without seeing iron-class
+ * heat through the tracker. Iron detected → restore to full duty. */
+#define FAN_AUTO_OFF_TIMEOUT_MS    (3000u)
+#define FAN_AUTO_ON_DUTY           (100u)
 
 /*******************************************************************************/
 /* Function Declarations                                                       */
@@ -38,6 +44,12 @@ static bool parse_axis_param(const char *pcCommandString, UBaseType_t param_inde
 static bool servo_set_pulse_us(cyhal_pwm_t *pwm_obj, uint32_t pulse_us);
 static bool servo_run_sweep(const servo_ctrl_message_t *msg);
 static void servo_track_hottest_ir_point(void);
+static void servo_fan_gate_tick(void);
+
+/* Updated whenever the tracker confirms iron-class heat in frame.
+ * 0 = never seen yet (don't auto-cut on boot until we've had a
+ * chance to look). */
+static volatile TickType_t g_last_iron_seen_ts = 0u;
 
 /*******************************************************************************/
 /* Global Variables                                                            */
@@ -360,6 +372,10 @@ static void servo_track_hottest_ir_point(void)
         return;
     }
 
+    /* Both gates passed → iron-class heat in frame. Stamps the
+     * last-iron-seen tick so the fan gate keeps the fan running. */
+    g_last_iron_seen_ts = xTaskGetTickCount();
+
     /* 8x8 Grid-EYE center is between pixels 3 and 4; signed error from raw
        hot-pixel location (no EMA — temporal smoothing lags fast targets into
        phantom middle positions that fall in deadband and freeze the tracker).
@@ -510,7 +526,35 @@ static void task_servo_ctrl(void *param)
 
         /* Tracker self-rate-limits internally to SERVO_TRACK_PERIOD_MS. */
         servo_track_hottest_ir_point();
+        servo_fan_gate_tick();
         servo_ramp_tick();
+    }
+}
+
+/* Auto-fan: only intervenes while auto-tracking is on. Manual
+ * mode (joystick) leaves fan duty alone — the user is in control.
+ * On boot or after a long no-iron stretch we cut the fan; the
+ * moment the tracker confirms iron we restore full duty. */
+static void servo_fan_gate_tick(void)
+{
+    if (!g_servo_track_enabled)
+    {
+        return;
+    }
+
+    TickType_t now = xTaskGetTickCount();
+    uint8_t fan_now = task_fan_get_duty();
+    bool iron_recent = (g_last_iron_seen_ts != 0u) &&
+                       ((now - g_last_iron_seen_ts) <
+                        pdMS_TO_TICKS(FAN_AUTO_OFF_TIMEOUT_MS));
+
+    if (iron_recent && fan_now == 0u)
+    {
+        task_fan_set_duty(FAN_AUTO_ON_DUTY);
+    }
+    else if (!iron_recent && fan_now != 0u)
+    {
+        task_fan_set_duty(0u);
     }
 }
 
