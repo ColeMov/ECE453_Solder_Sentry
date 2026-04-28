@@ -101,5 +101,7 @@ typedef struct
 extern QueueHandle_t q_servo_ctrl;
 
 void task_servo_ctrl_init(void);
+bool task_servo_ctrl_get_tracking(void);
+void task_servo_ctrl_set_tracking(bool enable);
 
 #endif

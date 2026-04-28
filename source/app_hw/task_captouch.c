@@ -14,6 +14,8 @@
 #include "task_blink.h"
 #include "task_ble.h"
 #include "task_audio.h"
+#include "task_fan.h"
+#include "task_servo_ctrl.h"
 #include "ece453_pins.h"
 
 #include "cyhal_gpio.h"
@@ -31,7 +33,14 @@ static void captouch_on_long_press(uint32_t held_ms);
 
 static void captouch_on_short_press(uint32_t held_ms)
 {
-    task_print_info("CapTouch: short press (%lu ms)", (unsigned long)held_ms);
+    /* Short tap toggles fan + IR auto-tracking together. Pad is the
+     * single user-accessible control on the unit, so both should follow
+     * the same on/off state — no point tracking with the fan dead. */
+    bool turning_on = (task_fan_get_duty() == 0u);
+    task_print_info("CapTouch: short press (%lu ms) — fan/track %s",
+                    (unsigned long)held_ms, turning_on ? "ON" : "OFF");
+    task_fan_set_duty(turning_on ? 100u : 0u);
+    task_servo_ctrl_set_tracking(turning_on);
 }
 
 static void captouch_on_long_press(uint32_t held_ms)

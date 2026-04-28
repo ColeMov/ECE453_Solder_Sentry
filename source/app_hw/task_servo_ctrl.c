@@ -869,3 +869,14 @@ void task_servo_ctrl_init(void)
                     (unsigned int)SERVO_TILT_INVERT);
     task_print_info("Servo auto-tracking: %s", g_servo_track_enabled ? "ON" : "OFF");
 }
+
+bool task_servo_ctrl_get_tracking(void)
+{
+    return g_servo_track_enabled;
+}
+
+void task_servo_ctrl_set_tracking(bool enable)
+{
+    g_servo_track_enabled = enable;
+    task_print_info("Auto-tracking %s", enable ? "ON" : "OFF");
+}
