@@ -57,7 +57,7 @@ int main(void)
     }
 
     /* TOF sensor (VL53L3CX) on Module Site 2 (P6.4/P6.5). Watches distance,
-     * triggers fan-kill + audio alert on close approach. */
+     * triggers fan-kill + tracking pause + audio alert on close approach. */
     rslt = i2c_init(MODULE_SITE_2);
     if (rslt == CY_RSLT_SUCCESS)
     {

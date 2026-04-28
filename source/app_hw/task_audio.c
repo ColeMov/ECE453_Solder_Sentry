@@ -124,9 +124,12 @@ static cy_rslt_t audio_dispatch_clip(const int16_t *pcm, uint32_t len, const cha
     p->len = len;
     p->name = name;
     g_audio_play_busy = true;
+    /* Highest priority while playing so no other task preempts the
+     * cyhal_system_delay_us busy-wait that drives DAC sample timing.
+     * Playback is short (~1-2 s) so blocking other tasks briefly is OK. */
     BaseType_t ok = xTaskCreate(task_audio_play, "AudPlay",
                                 3 * configMINIMAL_STACK_SIZE,
-                                p, tskIDLE_PRIORITY + 2, NULL);
+                                p, configMAX_PRIORITIES - 1, NULL);
     if (ok != pdPASS)
     {
         g_audio_play_busy = false;
