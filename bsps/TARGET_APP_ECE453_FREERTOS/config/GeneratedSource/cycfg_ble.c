@@ -95,13 +95,15 @@
     {
         /* Peripheral configuration 0 */
         {
-            .scanRspData = { 0x00u, 0x00u, 0x00u, 0x00u, 0x00u, 0x00u,
+            /* Complete Local Name "ECE453" so bleak/macOS scanners can find by name.
+             * Format: [len=7][type=0x09 Complete Local Name]['E','C','E','4','5','3'] */
+            .scanRspData = { 0x07u, 0x09u,
+                'E', 'C', 'E', '4', '5', '3',
                 0x00u, 0x00u, 0x00u, 0x00u, 0x00u, 0x00u,
                 0x00u, 0x00u, 0x00u, 0x00u, 0x00u, 0x00u,
                 0x00u, 0x00u, 0x00u, 0x00u, 0x00u, 0x00u,
-                0x00u, 0x00u, 0x00u, 0x00u, 0x00u, 0x00u,
-                0x00u }, 
-            .scanRspDataLen = 0x00u, 
+                0x00u, 0x00u, 0x00u, 0x00u, 0x00u },
+            .scanRspDataLen = 0x08u,
         },
     };
 
@@ -121,7 +123,10 @@
             .advParam = &cy_ble_discoveryParam[0], 
             .advData = &cy_ble_discoveryData[0], 
             .scanRspData = &cy_ble_scanRspData[0], 
-            .advTo = 0x1Eu, 
+            /* advTo=0 → adv never times out, BLESS never frees the adv-config
+             * entity. Was 0x1E (30s) which caused Cy_BLE_GAPP_StartAdvertisement
+             * to return 0x1600FF (NO_DEVICE_ENTITY) on every retry post-timeout. */
+            .advTo = 0x00u,
         },
     };
 #endif /* (CY_BLE_GAP_ROLE_PERIPHERAL || CY_BLE_GAP_ROLE_BROADCASTER) */

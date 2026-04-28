@@ -517,7 +517,7 @@ void task_ble_init(void)
                                      "BLE",
                                      6 * configMINIMAL_STACK_SIZE,
                                      NULL,
-                                     configMAX_PRIORITIES - 7,
+                                     configMAX_PRIORITIES - 2,
                                      NULL);
     if (task_ok != pdPASS)
     {
