@@ -84,10 +84,13 @@ void task_fan_set_duty(uint8_t duty_pct)
         duty_pct = 100u;
     }
 
-    /* duty 0 → cut V+ via the EN MOSFET. Fan stops dead, no failsafe
-     * spin-up. PWM line value doesn't matter while EN is low. */
+    /* duty 0 → cut V+ via the EN MOSFET AND drive PWM duty to 0. EN
+     * cut alone should be enough, but if the MOSFET gate leaks or the
+     * PWM line back-feeds the fan controller through a clamp diode the
+     * fan keeps spinning slowly. Belt-and-suspenders kills both paths. */
     if (duty_pct == 0u)
     {
+        (void)cyhal_pwm_set_duty_cycle(&g_fan_pwm, 0.0f, FAN_PWM_FREQUENCY_HZ);
         cyhal_gpio_write(FAN_EN_PIN, FAN_EN_INACTIVE);
         g_fan_duty = 0u;
         task_print_info("fan:0");
