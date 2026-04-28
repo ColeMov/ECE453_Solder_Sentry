@@ -56,9 +56,11 @@
 #include "cy_ble.h"
 #include "cy_ble_custom.h"
 
-/* NUS service is first custom service, TX is first characteristic. */
+/* NUS service is first custom service. TX (notify) char comes first
+ * in the BT Configurator design, RX (write/write-w/o-resp) is second. */
 #define BLE_NUS_SERVICE_INDEX   (0u)
 #define BLE_NUS_TX_CHAR_INDEX   (0u)
+#define BLE_NUS_RX_CHAR_INDEX   (1u)
 
 /* Max bytes per BLE notification (default ATT MTU minus 3 bytes overhead) */
 #define BLE_NOTIF_MAX_LEN       (20u)

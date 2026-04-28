@@ -33,7 +33,7 @@
 #define SERVO_DEFAULT_PAN_DEG      (90u)
 #define SERVO_DEFAULT_TILT_DEG     (90u)
 #define SERVO_CTRL_QUEUE_LEN       (8u)
-#define SERVO_TRACK_IR_ENABLE      (false)
+#define SERVO_TRACK_IR_ENABLE      (true)
 /* Flip these if the tracker runs away from the hot spot instead of toward it. */
 #define SERVO_TRACK_INVERT_COL     (true)
 #define SERVO_TRACK_INVERT_ROW     (true)

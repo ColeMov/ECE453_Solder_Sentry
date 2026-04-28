@@ -10,9 +10,11 @@
 #include "task_console.h"
 #include "task_ir_sensor.h"
 #include "task_audio.h"
+#include "task_servo_ctrl.h"
 #include "cy_ble_clk.h"
 #include "cy_sysint.h"
 #include <string.h>
+#include <stdlib.h>
 
 /* BLESS interrupt is MANDATORY for single-CM4 mode. Without it the link
  * layer can't service CONNECT_REQ and central sees a 10 s timeout. */
@@ -59,6 +61,7 @@ static void bless_interrupt_isr(void)
 /* Pointer helpers into generated custom service tables */
 #define NUS_SERV()    (cy_ble_customsConfigPtr->attrInfo[BLE_NUS_SERVICE_INDEX])
 #define NUS_TX_CHAR() (NUS_SERV().customServInfo[BLE_NUS_TX_CHAR_INDEX])
+#define NUS_RX_CHAR() (NUS_SERV().customServInfo[BLE_NUS_RX_CHAR_INDEX])
 
 QueueHandle_t q_ble_tx = NULL;
 volatile uint32_t g_ble_diag_state = 0u;
@@ -109,6 +112,58 @@ void task_ble_force_pairing_mode(void)
     /* INVALID_OPERATION returned if not currently advertising — ignore. */
     (void)Cy_BLE_GAPP_StopAdvertisement();
     ble_start_advertising_fast();
+}
+
+/* Parse a single command frame written to the NUS RX characteristic.
+ * Currently only "servo:<pan>,<tilt>\n" (desktop joystick). Bytes are
+ * NOT null-terminated by the BLE stack; copy to a local buffer first. */
+static void ble_handle_rx_payload(const uint8_t *bytes, uint16_t len)
+{
+    if ((bytes == NULL) || (len == 0u))
+    {
+        return;
+    }
+
+    char buf[64];
+    uint16_t copy = (len < (sizeof(buf) - 1u)) ? len : (uint16_t)(sizeof(buf) - 1u);
+    memcpy(buf, bytes, copy);
+    buf[copy] = '\0';
+
+    /* Strip trailing CR/LF that the desktop appends. */
+    while ((copy > 0u) && ((buf[copy - 1u] == '\r') || (buf[copy - 1u] == '\n')))
+    {
+        buf[--copy] = '\0';
+    }
+
+    if (strncmp(buf, "servo:", 6) == 0)
+    {
+        char *comma = strchr(buf + 6, ',');
+        if (comma == NULL)
+        {
+            task_print_warning("BLE RX: bad servo payload '%s'", buf);
+            return;
+        }
+        *comma = '\0';
+        long pan = strtol(buf + 6, NULL, 10);
+        long tilt = strtol(comma + 1, NULL, 10);
+        if (pan < 0) pan = 0; else if (pan > 180) pan = 180;
+        if (tilt < 0) tilt = 0; else if (tilt > 180) tilt = 180;
+
+        if (q_servo_ctrl != NULL)
+        {
+            servo_ctrl_message_t cmd = {0};
+            cmd.cmd = SERVO_CTRL_CMD_SET_ANGLE;
+            cmd.set_pan = true;
+            cmd.set_tilt = true;
+            cmd.pan_deg = (uint16_t)pan;
+            cmd.tilt_deg = (uint16_t)tilt;
+            (void)xQueueSend(q_servo_ctrl, &cmd, 0);
+        }
+    }
+    else
+    {
+        task_print_info("BLE RX: unhandled '%s'", buf);
+    }
 }
 
 static void ble_event_handler(uint32_t eventCode, void *eventParam)
@@ -190,8 +245,8 @@ static void ble_event_handler(uint32_t eventCode, void *eventParam)
 
             (void)Cy_BLE_GATTS_WriteAttributeValuePeer(&wr->connHandle, &wr->handleValPair);
 
-            /* CCCD of the TX characteristic controls notifications */
             cy_ble_gatt_db_attr_handle_t cccdHandle = NUS_TX_CHAR().customServCharDesc[0];
+            cy_ble_gatt_db_attr_handle_t rxHandle   = NUS_RX_CHAR().customServCharHandle;
             if (wr->handleValPair.attrHandle == cccdHandle)
             {
                 uint16_t cccd = 0u;
@@ -204,8 +259,31 @@ static void ble_event_handler(uint32_t eventCode, void *eventParam)
                 task_print_info("BLE: notifications %s",
                                 notifications_enabled ? "enabled" : "disabled");
             }
+            else if (wr->handleValPair.attrHandle == rxHandle)
+            {
+                ble_handle_rx_payload(wr->handleValPair.value.val,
+                                      wr->handleValPair.value.len);
+            }
 
             (void)Cy_BLE_GATTS_WriteRsp(wr->connHandle);
+            break;
+        }
+
+        /* Write-without-response (used by desktop joystick to avoid the
+         * round-trip ack). Same payload format as WRITE_REQ but no Rsp. */
+        case CY_BLE_EVT_GATTS_WRITE_CMD_REQ:
+        {
+            cy_stc_ble_gatts_write_cmd_req_param_t *wr =
+                (cy_stc_ble_gatts_write_cmd_req_param_t *)eventParam;
+
+            (void)Cy_BLE_GATTS_WriteAttributeValuePeer(&wr->connHandle, &wr->handleValPair);
+
+            cy_ble_gatt_db_attr_handle_t rxHandle = NUS_RX_CHAR().customServCharHandle;
+            if (wr->handleValPair.attrHandle == rxHandle)
+            {
+                ble_handle_rx_payload(wr->handleValPair.value.val,
+                                      wr->handleValPair.value.len);
+            }
             break;
         }
 
