@@ -10,9 +10,11 @@
 #include "task_console.h"
 #include "task_ir_sensor.h"
 #include "task_audio.h"
+#include "task_servo_ctrl.h"
 #include "cy_ble_clk.h"
 #include "cy_sysint.h"
 #include <string.h>
+#include <stdlib.h>
 
 /* BLESS interrupt is MANDATORY for single-CM4 mode. Without it the link
  * layer can't service CONNECT_REQ and central sees a 10 s timeout. */
@@ -59,6 +61,53 @@ static void bless_interrupt_isr(void)
 /* Pointer helpers into generated custom service tables */
 #define NUS_SERV()    (cy_ble_customsConfigPtr->attrInfo[BLE_NUS_SERVICE_INDEX])
 #define NUS_TX_CHAR() (NUS_SERV().customServInfo[BLE_NUS_TX_CHAR_INDEX])
+#define NUS_RX_CHAR() (NUS_SERV().customServInfo[BLE_NUS_RX_CHAR_INDEX])
+
+/* Parse one line of inbound text from the desktop GUI:
+ *     "track:0" / "track:1"  -> enable/disable IR auto-tracking
+ *     "servo:<pan>,<tilt>"   -> set absolute servo angles (degrees, 0..180)
+ * Anything else is logged. */
+static void ble_handle_rx_line(const uint8_t *buf, uint16_t len)
+{
+    /* Copy into a NUL-terminated stack buffer for sscanf-friendliness. */
+    char line[80];
+    if (len == 0u) return;
+    if (len >= sizeof(line)) len = sizeof(line) - 1;
+    memcpy(line, buf, len);
+    line[len] = '\0';
+
+    /* Trim trailing CR/LF */
+    while (len > 0 && (line[len-1] == '\r' || line[len-1] == '\n'))
+    {
+        line[--len] = '\0';
+    }
+
+    if (strncmp(line, "track:", 6) == 0)
+    {
+        int v = atoi(line + 6);
+        task_servo_ctrl_set_tracking(v != 0);
+        return;
+    }
+
+    if (strncmp(line, "servo:", 6) == 0)
+    {
+        int pan = -1, tilt = -1;
+        char *comma = strchr(line + 6, ',');
+        if (comma != NULL)
+        {
+            *comma = '\0';
+            pan  = atoi(line + 6);
+            tilt = atoi(comma + 1);
+        }
+        if (pan >= 0 && pan <= 180 && tilt >= 0 && tilt <= 180)
+        {
+            task_servo_ctrl_set_angles((uint16_t)pan, (uint16_t)tilt);
+        }
+        return;
+    }
+
+    task_print_info("BLE RX: '%s'", line);
+}
 
 QueueHandle_t q_ble_tx = NULL;
 volatile uint32_t g_ble_diag_state = 0u;
@@ -192,6 +241,7 @@ static void ble_event_handler(uint32_t eventCode, void *eventParam)
 
             /* CCCD of the TX characteristic controls notifications */
             cy_ble_gatt_db_attr_handle_t cccdHandle = NUS_TX_CHAR().customServCharDesc[0];
+            cy_ble_gatt_db_attr_handle_t rxHandle   = NUS_RX_CHAR().customServCharHandle;
             if (wr->handleValPair.attrHandle == cccdHandle)
             {
                 uint16_t cccd = 0u;
@@ -203,6 +253,11 @@ static void ble_event_handler(uint32_t eventCode, void *eventParam)
                 notifications_enabled = (cccd == CY_BLE_GATT_CLI_CNFG_NOTIFICATION);
                 task_print_info("BLE: notifications %s",
                                 notifications_enabled ? "enabled" : "disabled");
+            }
+            else if (wr->handleValPair.attrHandle == rxHandle)
+            {
+                ble_handle_rx_line(wr->handleValPair.value.val,
+                                   wr->handleValPair.value.len);
             }
 
             (void)Cy_BLE_GATTS_WriteRsp(wr->connHandle);

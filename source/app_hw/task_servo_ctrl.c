@@ -868,4 +868,33 @@ void task_servo_ctrl_init(void)
                     (unsigned long)SERVO_TILT_MAX_PULSE_US,
                     (unsigned int)SERVO_TILT_INVERT);
     task_print_info("Servo auto-tracking: %s", g_servo_track_enabled ? "ON" : "OFF");
+    task_print_info("track:%u", g_servo_track_enabled ? 1u : 0u);
+}
+
+void task_servo_ctrl_set_tracking(bool enabled)
+{
+    if (g_servo_track_enabled == enabled)
+    {
+        return;
+    }
+    g_servo_track_enabled = enabled;
+    task_print_info("track:%u", enabled ? 1u : 0u);
+}
+
+void task_servo_ctrl_set_angles(uint16_t pan_deg, uint16_t tilt_deg)
+{
+    if (q_servo_ctrl == NULL)
+    {
+        return;
+    }
+    if (pan_deg > 180u)  pan_deg = 180u;
+    if (tilt_deg > 180u) tilt_deg = 180u;
+
+    servo_ctrl_message_t msg = {0};
+    msg.cmd      = SERVO_CTRL_CMD_SET_ANGLE;
+    msg.set_pan  = true;
+    msg.set_tilt = true;
+    msg.pan_deg  = pan_deg;
+    msg.tilt_deg = tilt_deg;
+    (void)xQueueSendToBack(q_servo_ctrl, &msg, 0u);
 }

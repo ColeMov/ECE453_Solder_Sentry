@@ -463,6 +463,29 @@ class SolderSentryApp(ctk.CTk):
         self._joystick = Joystick(right, on_change=self._on_servo_change)
         self._joystick.grid(row=2, column=0, sticky="ew", pady=(0, 12))
 
+        # Auto-tracking toggle card
+        track_card = ctk.CTkFrame(right, fg_color=GREY_800, corner_radius=18)
+        track_card.grid(row=3, column=0, sticky="ew", pady=(0, 12))
+        track_card.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(track_card, text="Auto-tracking",
+                     font=FONT_LABEL, text_color=GREY_300).grid(
+            row=0, column=0, sticky="w", padx=20, pady=(16, 0))
+
+        self._track_status = ctk.CTkLabel(
+            track_card, text="—", font=FONT_DISPLAY, text_color=WHITE)
+        self._track_status.grid(row=1, column=0, sticky="w", padx=20,
+                                pady=(0, 4))
+
+        self._track_switch = ctk.CTkSwitch(
+            track_card, text="Enabled", font=FONT_LABEL,
+            command=self._on_track_toggle,
+            progress_color=ACCENT_GREEN, button_color=WHITE,
+            text_color=WHITE)
+        self._track_switch.grid(row=2, column=0, sticky="w", padx=20,
+                                pady=(0, 18))
+        self._track_switch.select()  # default ON to mirror firmware
+
     # ── BLE thread callbacks ──
     def _on_frame_thread(self, thermistor_c: float, grid: np.ndarray):
         try:
@@ -483,6 +506,11 @@ class SolderSentryApp(ctk.CTk):
     # ── GUI thread ──
     def _on_servo_change(self, pan_deg: int, tilt_deg: int):
         self._client.send_servo_threadsafe(pan_deg, tilt_deg)
+
+    def _on_track_toggle(self):
+        on = self._track_switch.get() == 1
+        self._track_switch.configure(text="Enabled" if on else "Disabled")
+        self._client.send_text_threadsafe(f"track:{1 if on else 0}\n")
 
     def _pump_frames(self):
         try:
@@ -512,6 +540,18 @@ class SolderSentryApp(ctk.CTk):
                         self._paused_dot.set_state(
                             _state.paused,
                             "PAUSED — too close" if _state.paused else "Active")
+                    elif key == "track":
+                        on = bool(value)
+                        # Sync GUI switch + status without firing toggle handler
+                        self._track_status.configure(
+                            text="ON" if on else "OFF",
+                            text_color=ACCENT_GREEN if on else GREY_500)
+                        if on and self._track_switch.get() == 0:
+                            self._track_switch.select()
+                            self._track_switch.configure(text="Enabled")
+                        elif not on and self._track_switch.get() == 1:
+                            self._track_switch.deselect()
+                            self._track_switch.configure(text="Disabled")
                 elif kind == "state":
                     s = payload
                     _state.connected = (s == "connected")

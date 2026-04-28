@@ -33,7 +33,7 @@
 #define SERVO_DEFAULT_PAN_DEG      (90u)
 #define SERVO_DEFAULT_TILT_DEG     (90u)
 #define SERVO_CTRL_QUEUE_LEN       (8u)
-#define SERVO_TRACK_IR_ENABLE      (false)
+#define SERVO_TRACK_IR_ENABLE      (true)
 /* Flip these if the tracker runs away from the hot spot instead of toward it. */
 #define SERVO_TRACK_INVERT_COL     (true)
 #define SERVO_TRACK_INVERT_ROW     (true)
@@ -101,5 +101,14 @@ typedef struct
 extern QueueHandle_t q_servo_ctrl;
 
 void task_servo_ctrl_init(void);
+
+/* Enable / disable IR-hottest-point auto-tracking at runtime. Used by the
+ * TOF safety logic (pause when something blocks the line of sight) and by
+ * the BLE 'track:0|1' command. */
+void task_servo_ctrl_set_tracking(bool enabled);
+
+/* Set absolute pan / tilt angles in degrees (0..180). Clamped internally.
+ * Used by the BLE 'servo:p,t' joystick command. */
+void task_servo_ctrl_set_angles(uint16_t pan_deg, uint16_t tilt_deg);
 
 #endif

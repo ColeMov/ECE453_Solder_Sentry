@@ -38,7 +38,7 @@ TOTAL_PIXELS      = CHUNKS_PER_FRAME * PIXELS_PER_CHUNK
 class IRFrameReceiver:
     """Reassembles multi-packet IR frames + parses telemetry lines."""
 
-    _TELEM_RE = re.compile(rb"(tof|fan|paused):(-?\d+)")
+    _TELEM_RE = re.compile(rb"(tof|fan|paused|track):(-?\d+)")
 
     def __init__(self, on_frame, on_telemetry=None, on_log=None):
         self._on_frame = on_frame
@@ -127,20 +127,28 @@ class SolderSentryClient:
     def connected(self) -> bool:
         return self._connected
 
-    async def send_servo(self, pan_deg: int, tilt_deg: int):
+    async def send_text(self, text: str):
         if self._client is None or not self._client.is_connected:
             return
-        msg = f"servo:{int(pan_deg)},{int(tilt_deg)}\n".encode("ascii")
         try:
-            await self._client.write_gatt_char(NUS_RX_UUID, msg, response=False)
+            await self._client.write_gatt_char(
+                NUS_RX_UUID, text.encode("ascii"), response=False)
         except Exception:
             pass
+
+    async def send_servo(self, pan_deg: int, tilt_deg: int):
+        await self.send_text(f"servo:{int(pan_deg)},{int(tilt_deg)}\n")
 
     def send_servo_threadsafe(self, pan_deg: int, tilt_deg: int):
         if self._loop is None:
             return
         asyncio.run_coroutine_threadsafe(
             self.send_servo(pan_deg, tilt_deg), self._loop)
+
+    def send_text_threadsafe(self, text: str):
+        if self._loop is None:
+            return
+        asyncio.run_coroutine_threadsafe(self.send_text(text), self._loop)
 
 
 async def _find_device():

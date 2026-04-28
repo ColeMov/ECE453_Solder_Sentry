@@ -4,6 +4,7 @@
 #include "task_blink.h"
 #include "task_fan.h"
 #include "task_audio.h"
+#include "task_servo_ctrl.h"
 #include "i2c.h"
 #include "ece453_pins.h"
 #include "FreeRTOS_CLI.h"
@@ -14,10 +15,10 @@
 
 #define TOF_XSHUT_HOLD_MS          (50u)
 #define TOF_I2C_SPEED_KHZ          (100u)
-/* Hysteresis: trip "too close" below 100 mm, clear above 150 mm. Prevents
+/* Hysteresis: trip "too close" below 300 mm, clear above 400 mm. Prevents
  * the fan from flapping on/off when an object hovers near the threshold. */
-#define TOF_NEAR_ENTER_MM          (100u)
-#define TOF_NEAR_LEAVE_MM          (150u)
+#define TOF_NEAR_ENTER_MM          (300u)
+#define TOF_NEAR_LEAVE_MM          (400u)
 #define TOF_FAN_RESUME_DUTY        (100u)
 #define TOF_TIMING_BUDGET_US       (50000u)
 #define TOF_INTER_MEASUREMENT_MS   (60u)
@@ -222,22 +223,23 @@ static void task_tof(void *param)
 
     while (1)
     {
-        /* Check is_data_ready (single I2C read) at modest cadence. Only
-         * GetMultiRangingData + ClearInterruptAndStartMeasurement when
-         * a measurement actually completed — otherwise we tear down
-         * mid-range and the sensor never produces data. */
-        vTaskDelay(pdMS_TO_TICKS(50u));
+        /* Poll the GPIO1 INT pin (P12.7) directly — open-drain active-low
+         * per datasheet. Bypasses the driver's I2C-polled status register
+         * which has been unreliable on this bus. Wired pull-up is enabled
+         * in tof_gpio_init so the line idles HIGH and goes LOW on ready. */
+        vTaskDelay(pdMS_TO_TICKS(20u));
         poll_count++;
 
-        uint8_t data_ready = 0u;
-        VL53LX_Error rs_status = VL53LX_GetMeasurementDataReady(&tof_dev, &data_ready);
-        if (rs_status != VL53LX_ERROR_NONE || data_ready == 0u)
+        if (cyhal_gpio_read(MOD_2_PIN_IO_1) != 0u)
         {
-            if ((poll_count % 40u) == 0u)
+            /* Every ~2 s of waiting, kick the sensor by re-arming the
+             * measurement. Sometimes the sensor "forgets" to restart
+             * after Clear and stays idle. */
+            if ((poll_count % 100u) == 0u)
             {
-                task_print_info("ToF: waiting (poll=%lu rs_status=%d ready=%u)",
-                                (unsigned long)poll_count, (int)rs_status,
-                                (unsigned)data_ready);
+                task_print_info("ToF: waiting on INT pin (poll=%lu) — re-arming",
+                                (unsigned long)poll_count);
+                (void)VL53LX_ClearInterruptAndStartMeasurement(&tof_dev);
             }
             continue;
         }
@@ -268,6 +270,10 @@ static void task_tof(void *param)
             too_close = true;
             task_print_info("paused:1");
             task_fan_set_duty(0);
+            /* Pause IR-tracker too: the TOF sits next to the fan, so any
+             * pan/tilt motion swings TOF off-target and the safety logic
+             * loses its read. Stop motion until the obstruction clears. */
+            task_servo_ctrl_set_tracking(false);
             (void)task_audio_say("too_close");
         }
         else if (too_close && valid_reading &&
@@ -276,6 +282,7 @@ static void task_tof(void *param)
             too_close = false;
             task_print_info("paused:0");
             task_fan_set_duty(TOF_FAN_RESUME_DUTY);
+            task_servo_ctrl_set_tracking(true);
         }
 
         status = VL53LX_ClearInterruptAndStartMeasurement(&tof_dev);
