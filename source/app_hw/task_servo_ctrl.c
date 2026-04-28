@@ -367,14 +367,19 @@ static void servo_track_hottest_ir_point(void)
     {
         return;
     }
+
+    /* Iron-presence stamp uses ONLY the absolute-temp gate. When the
+     * iron sits close to the sensor it warms every pixel — hot - mean
+     * collapses below SERVO_TRACK_MIN_CONTRAST_C, the tracker bails
+     * before stamping, and the fan-gate 3s-times out exactly when
+     * the user is actively soldering. Steering still demands contrast
+     * (next gate); fan presence does not. */
+    g_last_iron_seen_ts = xTaskGetTickCount();
+
     if ((hot_temp_c - mean_temp_c) < SERVO_TRACK_MIN_CONTRAST_C)
     {
         return;
     }
-
-    /* Both gates passed → iron-class heat in frame. Stamps the
-     * last-iron-seen tick so the fan gate keeps the fan running. */
-    g_last_iron_seen_ts = xTaskGetTickCount();
 
     /* 8x8 Grid-EYE center is between pixels 3 and 4; signed error from raw
        hot-pixel location (no EMA — temporal smoothing lags fast targets into
