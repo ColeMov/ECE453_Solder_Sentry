@@ -4,6 +4,7 @@
 #include "task_blink.h"
 #include "task_fan.h"
 #include "task_audio.h"
+#include "task_servo_ctrl.h"
 #include "i2c.h"
 #include "ece453_pins.h"
 #include "FreeRTOS_CLI.h"
@@ -258,7 +259,15 @@ static void task_tof(void *param)
                              (range_status == VL53LX_RANGESTATUS_RANGE_VALID) &&
                              (distance_mm > 0);
 
-        if (!too_close && valid_reading &&
+        /* TOF too-close pause only fires in manual mode. While
+         * auto-tracking is engaged the head naturally points at the
+         * iron, putting it close to the TOF sensor; tripping the
+         * pause every frame fights with the tracker's iron-present
+         * fan gate and averages the fan PWM low. The tracker's gates
+         * are the right safety check during auto-tracking. */
+        bool tracking_active = task_servo_ctrl_get_tracking();
+
+        if (!tracking_active && !too_close && valid_reading &&
             ((uint16_t)distance_mm <= TOF_NEAR_ENTER_MM))
         {
             too_close = true;
@@ -267,11 +276,15 @@ static void task_tof(void *param)
             (void)task_audio_say("too_close");
         }
         else if (too_close && valid_reading &&
-                 ((uint16_t)distance_mm >= TOF_NEAR_LEAVE_MM))
+                 (tracking_active ||
+                  (uint16_t)distance_mm >= TOF_NEAR_LEAVE_MM))
         {
             too_close = false;
             task_print_info("paused:0");
-            task_fan_set_duty(TOF_FAN_RESUME_DUTY);
+            if (!tracking_active)
+            {
+                task_fan_set_duty(TOF_FAN_RESUME_DUTY);
+            }
         }
 
         status = VL53LX_ClearInterruptAndStartMeasurement(&tof_dev);
