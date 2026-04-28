@@ -92,7 +92,7 @@ def _push_event(kind: str, payload):
 
 # ── Widgets ─────────────────────────────────────────────────────────────────
 class StatusDot(ctk.CTkFrame):
-    """Pill-style status indicator with label."""
+    """Pill-style status indicator with coloured dot + label."""
 
     def __init__(self, master, label: str, on_color: str, off_color: str):
         super().__init__(master, fg_color=GREY_800, corner_radius=14)
@@ -112,6 +112,12 @@ class StatusDot(ctk.CTkFrame):
     def set_state(self, on: bool, label: Optional[str] = None):
         self._canvas.itemconfig(self._dot,
                                 fill=self._on_color if on else self._off_color)
+        if label is not None:
+            self._label.configure(text=label)
+
+    def set_dot_color(self, color: str, label: Optional[str] = None):
+        """Tri-state / arbitrary colour override (used for BLE pairing)."""
+        self._canvas.itemconfig(self._dot, fill=color)
         if label is not None:
             self._label.configure(text=label)
 
@@ -239,7 +245,11 @@ class FanBar(ctk.CTkFrame):
 
 
 class Joystick(ctk.CTkFrame):
-    """Touch-style 2D joystick. Drag the dot, on release sends servo cmd."""
+    """Touch-style 2D joystick + lock toggle.
+
+    When locked: pad is muted, dragging does nothing, no servo cmds emitted.
+    When unlocked: drag to aim, release snaps to centre 90°/90°.
+    """
 
     SIZE = 200
     DOT_R = 18
@@ -247,13 +257,28 @@ class Joystick(ctk.CTkFrame):
     def __init__(self, master, on_change):
         super().__init__(master, fg_color=GREY_800, corner_radius=24)
         self._on_change = on_change
+        self._locked = True   # safe default: motors locked on launch
 
-        ctk.CTkLabel(self, text="Servo", font=FONT_LABEL,
-                     text_color=GREY_300).grid(
-            row=0, column=0, sticky="w", padx=20, pady=(16, 4))
+        # Title row with lock toggle
+        head = ctk.CTkFrame(self, fg_color=GREY_800)
+        head.grid(row=0, column=0, sticky="ew", padx=20, pady=(16, 4))
+        head.grid_columnconfigure(0, weight=1)
 
-        self._readout = ctk.CTkLabel(self, text="pan 90°  tilt 90°",
-                                     font=FONT_MONO, text_color=WHITE)
+        ctk.CTkLabel(head, text="Servo", font=FONT_LABEL,
+                     text_color=GREY_300).grid(row=0, column=0, sticky="w")
+
+        self._lock_switch = ctk.CTkSwitch(
+            head, text="Unlocked", font=FONT_LABEL,
+            command=self._on_lock_toggle,
+            progress_color=ACCENT_GREEN,
+            button_color=WHITE,
+            text_color=WHITE)
+        self._lock_switch.grid(row=0, column=1, sticky="e")
+        # Start switched OFF (locked)
+        self._lock_switch.deselect()
+
+        self._readout = ctk.CTkLabel(self, text="🔒 locked",
+                                     font=FONT_MONO, text_color=GREY_500)
         self._readout.grid(row=1, column=0, sticky="w", padx=20, pady=(0, 8))
 
         self._canvas = tk.Canvas(self, width=self.SIZE, height=self.SIZE,
@@ -267,27 +292,47 @@ class Joystick(ctk.CTkFrame):
         self._cy = self.SIZE / 2
         self._draw_pad()
 
+    def _on_lock_toggle(self):
+        self._locked = self._lock_switch.get() == 0
+        if self._locked:
+            self._lock_switch.configure(text="Locked")
+            self._readout.configure(text="🔒 locked", text_color=GREY_500)
+        else:
+            self._lock_switch.configure(text="Unlocked")
+            self._readout.configure(
+                text=f"pan {SERVO_PAN_CENTER}°  tilt {SERVO_TILT_CENTER}°",
+                text_color=WHITE)
+        self._draw_pad()
+
     def _draw_pad(self):
         c = self._canvas
         c.delete("all")
         s = self.SIZE
-        c.create_oval(8, 8, s - 8, s - 8, outline=GREY_700, width=2)
-        c.create_line(s / 2, 24, s / 2, s - 24, fill=GREY_700)
-        c.create_line(24, s / 2, s - 24, s / 2, fill=GREY_700)
+        ring_color = GREY_700
+        thumb_color = GREY_500 if self._locked else ACCENT_BLUE
+        c.create_oval(8, 8, s - 8, s - 8, outline=ring_color, width=2)
+        c.create_line(s / 2, 24, s / 2, s - 24, fill=ring_color)
+        c.create_line(24, s / 2, s - 24, s / 2, fill=ring_color)
         c.create_oval(s / 2 - 4, s / 2 - 4, s / 2 + 4, s / 2 + 4,
                       fill=GREY_500, outline="")
         r = self.DOT_R
         self._thumb = c.create_oval(self._cx - r, self._cy - r,
                                     self._cx + r, self._cy + r,
-                                    fill=ACCENT_BLUE, outline="")
+                                    fill=thumb_color, outline="")
 
     def _on_press(self, e):
+        if self._locked:
+            return
         self._move_to(e.x, e.y)
 
     def _on_drag(self, e):
+        if self._locked:
+            return
         self._move_to(e.x, e.y)
 
     def _on_release(self, _e):
+        if self._locked:
+            return
         self._cx = self.SIZE / 2
         self._cy = self.SIZE / 2
         self._draw_pad()
@@ -431,8 +476,9 @@ class SolderSentryApp(ctk.CTk):
     def _on_log_thread(self, line: str):
         _push_event("log", line)
 
-    def _on_state_thread(self, connected: bool):
-        _push_event("state", connected)
+    def _on_state_thread(self, state):
+        # state is a string: "scanning" | "connected" | "disconnected"
+        _push_event("state", state)
 
     # ── GUI thread ──
     def _on_servo_change(self, pan_deg: int, tilt_deg: int):
@@ -467,10 +513,16 @@ class SolderSentryApp(ctk.CTk):
                             _state.paused,
                             "PAUSED — too close" if _state.paused else "Active")
                 elif kind == "state":
-                    _state.connected = bool(payload)
-                    self._connection_dot.set_state(
-                        _state.connected,
-                        "Connected" if _state.connected else "Disconnected")
+                    s = payload
+                    _state.connected = (s == "connected")
+                    if s == "connected":
+                        self._connection_dot.set_dot_color(ACCENT_GREEN, "Paired")
+                    elif s == "scanning":
+                        self._connection_dot.set_dot_color(ACCENT_AMBER,
+                                                           "Pairing…")
+                    else:
+                        self._connection_dot.set_dot_color(GREY_500,
+                                                           "Disconnected")
         except queue.Empty:
             pass
         self.after(50, self._pump_events)

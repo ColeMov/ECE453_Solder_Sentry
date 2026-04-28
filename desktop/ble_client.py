@@ -163,15 +163,22 @@ async def _find_device():
 
 
 async def run_ble(client_obj: "SolderSentryClient", stop_event: asyncio.Event):
-    """Connect + stream until stop_event is set. Auto-reconnects on drop."""
+    """Connect + stream until stop_event is set. Auto-reconnects on drop.
+
+    Reports tri-state to client_obj._on_state:
+        "scanning" — actively looking for the device
+        "connected" — paired and streaming
+        "disconnected" — idle, will retry shortly
+    """
     client_obj._loop = asyncio.get_running_loop()
     while not stop_event.is_set():
         try:
+            client_obj._on_state("scanning")
             device = await _find_device()
             async with BleakClient(device) as client:
                 client_obj._client = client
                 client_obj._connected = True
-                client_obj._on_state(True)
+                client_obj._on_state("connected")
                 print("Connected. Enabling notifications...")
                 await client.start_notify(
                     NUS_TX_UUID, client_obj._receiver.handle_notification)
@@ -183,7 +190,7 @@ async def run_ble(client_obj: "SolderSentryClient", stop_event: asyncio.Event):
         finally:
             client_obj._client = None
             client_obj._connected = False
-            client_obj._on_state(False)
+            client_obj._on_state("disconnected")
         if not stop_event.is_set():
             print("Reconnecting in 2 s...")
             try:
