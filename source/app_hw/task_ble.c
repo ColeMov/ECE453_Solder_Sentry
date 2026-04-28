@@ -154,10 +154,32 @@ void task_ble_force_pairing_mode(void)
         task_print_warning("BLE: pairing-mode requested before stack ready");
         return;
     }
-    task_print_info("BLE: entering pairing mode (restart FAST adv)");
-    /* INVALID_OPERATION returned if not currently advertising — ignore. */
+    task_print_info("BLE: entering pairing mode");
+
+    /* If adv is still active, just restart it. */
     (void)Cy_BLE_GAPP_StopAdvertisement();
-    ble_start_advertising_fast();
+    cy_en_ble_api_result_t r = Cy_BLE_GAPP_StartAdvertisement(
+        CY_BLE_ADVERTISING_FAST,
+        CY_BLE_PERIPHERAL_CONFIGURATION_0_INDEX);
+    if (r == CY_BLE_SUCCESS || r == CY_BLE_ERROR_INVALID_OPERATION)
+    {
+        task_print_info("BLE: advertising request (FAST), result=0x%04X", (unsigned)r);
+        return;
+    }
+
+    /* Post-timeout the adv-config entity is freed; StartAdvertisement
+     * returns 0x1600FF until the stack is re-init'd. Cycle the stack
+     * via Disable + Enable, which re-creates the entity. STACK_ON event
+     * will fire again and start fresh fast advertising automatically. */
+    task_print_info("BLE: adv start failed (0x%04X), cycling stack", (unsigned)r);
+    ble_stack_on = false;
+    (void)Cy_BLE_Disable();
+    vTaskDelay(pdMS_TO_TICKS(100u));
+    cy_en_ble_api_result_t er = Cy_BLE_Enable();
+    if (er != CY_BLE_SUCCESS)
+    {
+        task_print_error("BLE: re-enable failed (0x%04X)", (unsigned)er);
+    }
 }
 
 static void ble_event_handler(uint32_t eventCode, void *eventParam)
@@ -227,10 +249,15 @@ static void ble_event_handler(uint32_t eventCode, void *eventParam)
             break;
 
         case CY_BLE_EVT_TIMEOUT:
-            /* Don't auto-restart advertising — only the long-press captouch
-             * trigger should put us back into pairing mode. */
-            task_print_info("BLE: timeout (advertisement window ended)");
+        {
+            /* Adv timed out. Restart immediately so the adv-config entity
+             * never gets freed. Without this the next StartAdvertisement
+             * fails with 0x1600FF (NO_DEVICE_ENTITY) and only a full MCU
+             * reset recovers. */
+            task_print_info("BLE: adv timed out — restarting immediately");
+            ble_start_advertising_fast();
             break;
+        }
 
         case CY_BLE_EVT_GATTS_WRITE_REQ:
         {

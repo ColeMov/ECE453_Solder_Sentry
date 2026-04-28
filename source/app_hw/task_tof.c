@@ -262,9 +262,10 @@ static void task_tof(void *param)
             task_print_info("tof:%d", (int)distance_mm);
         }
 
-        bool valid_reading = (status == VL53LX_ERROR_NONE) &&
-                             (range_status == VL53LX_RANGESTATUS_RANGE_VALID) &&
-                             (distance_mm > 0);
+        /* Accept any positive reading — RANGE_VALID is too strict on this
+         * sensor; close objects sometimes report SIGMA_FAIL or SIGNAL_FAIL
+         * even with the right distance. We just want a real number. */
+        bool valid_reading = (status == VL53LX_ERROR_NONE) && (distance_mm > 0);
 
         if (!too_close && valid_reading &&
             ((uint16_t)distance_mm <= TOF_NEAR_ENTER_MM))

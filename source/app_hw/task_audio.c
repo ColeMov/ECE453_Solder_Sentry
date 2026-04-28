@@ -116,7 +116,7 @@ static cy_rslt_t audio_dispatch_clip(const int16_t *pcm, uint32_t len, const cha
     p->name = name;
     BaseType_t ok = xTaskCreate(task_audio_play, "AudPlay",
                                 3 * configMINIMAL_STACK_SIZE,
-                                p, tskIDLE_PRIORITY + 2, NULL);
+                                p, configMAX_PRIORITIES - 3, NULL);
     if (ok != pdPASS)
     {
         vPortFree(p);
@@ -304,7 +304,7 @@ static BaseType_t cli_handler_audio(char *pcWriteBuffer,
 
         BaseType_t ok = xTaskCreate(task_audio_tone, "AudTone",
                                     3 * configMINIMAL_STACK_SIZE,
-                                    p, tskIDLE_PRIORITY + 2, NULL);
+                                    p, configMAX_PRIORITIES - 3, NULL);
         if (ok != pdPASS)
         {
             vPortFree(p);
