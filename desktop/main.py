@@ -277,7 +277,7 @@ class Joystick(ctk.CTkFrame):
         # Start switched OFF (locked)
         self._lock_switch.deselect()
 
-        self._readout = ctk.CTkLabel(self, text="🔒 locked",
+        self._readout = ctk.CTkLabel(self, text="locked",
                                      font=FONT_MONO, text_color=GREY_500)
         self._readout.grid(row=1, column=0, sticky="w", padx=20, pady=(0, 8))
 
@@ -296,7 +296,7 @@ class Joystick(ctk.CTkFrame):
         self._locked = self._lock_switch.get() == 0
         if self._locked:
             self._lock_switch.configure(text="Locked")
-            self._readout.configure(text="🔒 locked", text_color=GREY_500)
+            self._readout.configure(text="locked", text_color=GREY_500)
         else:
             self._lock_switch.configure(text="Unlocked")
             self._readout.configure(
