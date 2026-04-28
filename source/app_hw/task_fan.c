@@ -90,6 +90,7 @@ void task_fan_set_duty(uint8_t duty_pct)
     {
         cyhal_gpio_write(FAN_EN_PIN, FAN_EN_INACTIVE);
         g_fan_duty = 0u;
+        task_print_info("fan:0");
         return;
     }
 

@@ -11,6 +11,7 @@
 #include "task_ir_sensor.h"
 #include "task_audio.h"
 #include "task_servo_ctrl.h"
+#include "task_fan.h"
 #include "cy_ble_clk.h"
 #include "cy_sysint.h"
 #include <string.h>
@@ -160,6 +161,12 @@ static void ble_handle_rx_payload(const uint8_t *bytes, uint16_t len)
             (void)xQueueSend(q_servo_ctrl, &cmd, 0);
         }
     }
+    else if (strncmp(buf, "track:", 6) == 0)
+    {
+        /* Desktop joystick sends track:0 on grab, track:1 on release. */
+        bool enable = (buf[6] == '1');
+        task_servo_ctrl_set_tracking(enable);
+    }
     else
     {
         task_print_info("BLE RX: unhandled '%s'", buf);
@@ -258,6 +265,15 @@ static void ble_event_handler(uint32_t eventCode, void *eventParam)
                 notifications_enabled = (cccd == CY_BLE_GATT_CLI_CNFG_NOTIFICATION);
                 task_print_info("BLE: notifications %s",
                                 notifications_enabled ? "enabled" : "disabled");
+                /* Push current fan + tracking snapshot so the desktop GUI
+                 * can sync its widgets immediately on connect — TOF/fan
+                 * pause/track changes are otherwise event-driven only. */
+                if (notifications_enabled)
+                {
+                    task_print_info("fan:%u", (unsigned)task_fan_get_duty());
+                    task_print_info("track:%u",
+                                    task_servo_ctrl_get_tracking() ? 1u : 0u);
+                }
             }
             else if (wr->handleValPair.attrHandle == rxHandle)
             {

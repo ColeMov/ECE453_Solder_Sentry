@@ -244,9 +244,11 @@ class Joystick(ctk.CTkFrame):
     SIZE = 200
     DOT_R = 18
 
-    def __init__(self, master, on_change):
+    def __init__(self, master, on_change, on_grab=None, on_release=None):
         super().__init__(master, fg_color=GREY_800, corner_radius=24)
         self._on_change = on_change
+        self._grab_cb = on_grab or (lambda: None)
+        self._release_cb = on_release or (lambda: None)
 
         ctk.CTkLabel(self, text="Servo", font=FONT_LABEL,
                      text_color=GREY_300).grid(
@@ -282,6 +284,7 @@ class Joystick(ctk.CTkFrame):
                                     fill=ACCENT_BLUE, outline="")
 
     def _on_press(self, e):
+        self._grab_cb()
         self._move_to(e.x, e.y)
 
     def _on_drag(self, e):
@@ -294,6 +297,7 @@ class Joystick(ctk.CTkFrame):
         self._on_change(SERVO_PAN_CENTER, SERVO_TILT_CENTER)
         self._readout.configure(
             text=f"pan {SERVO_PAN_CENTER}°  tilt {SERVO_TILT_CENTER}°")
+        self._release_cb()
 
     def _move_to(self, x, y):
         s = self.SIZE
@@ -368,6 +372,13 @@ class SolderSentryApp(ctk.CTk):
                                      off_color=GREY_500)
         self._paused_dot.pack(side="right", padx=(8, 0))
 
+        # Tracking light: lit when board auto-tracks hottest IR pixel,
+        # dim while user is driving the joystick manually.
+        self._tracking_dot = StatusDot(header, "Manual",
+                                       on_color=ACCENT_GREEN,
+                                       off_color=GREY_500)
+        self._tracking_dot.pack(side="right", padx=(8, 0))
+
         # Left: thermal heatmap
         left = ctk.CTkFrame(self, fg_color=GREY_800, corner_radius=20)
         left.grid(row=1, column=0, sticky="nsew", padx=(24, 12), pady=(0, 24))
@@ -415,7 +426,10 @@ class SolderSentryApp(ctk.CTk):
         self._fan_bar = FanBar(right, "Fan")
         self._fan_bar.grid(row=1, column=0, sticky="ew", pady=(0, 12))
 
-        self._joystick = Joystick(right, on_change=self._on_servo_change)
+        self._joystick = Joystick(right,
+                                  on_change=self._on_servo_change,
+                                  on_grab=self._on_joystick_grab,
+                                  on_release=self._on_joystick_release)
         self._joystick.grid(row=2, column=0, sticky="ew", pady=(0, 12))
 
     # ── BLE thread callbacks ──
@@ -437,6 +451,14 @@ class SolderSentryApp(ctk.CTk):
     # ── GUI thread ──
     def _on_servo_change(self, pan_deg: int, tilt_deg: int):
         self._client.send_servo_threadsafe(pan_deg, tilt_deg)
+
+    def _on_joystick_grab(self):
+        # User taking manual control — kill auto-tracking until release.
+        self._client.send_track_threadsafe(False)
+
+    def _on_joystick_release(self):
+        # Joystick snapped back to center — hand control back to tracker.
+        self._client.send_track_threadsafe(True)
 
     def _pump_frames(self):
         try:
@@ -466,6 +488,11 @@ class SolderSentryApp(ctk.CTk):
                         self._paused_dot.set_state(
                             _state.paused,
                             "PAUSED — too close" if _state.paused else "Active")
+                    elif key == "track":
+                        tracking = bool(value)
+                        self._tracking_dot.set_state(
+                            tracking,
+                            "Auto-track" if tracking else "Manual")
                 elif kind == "state":
                     _state.connected = bool(payload)
                     self._connection_dot.set_state(

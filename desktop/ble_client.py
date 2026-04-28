@@ -38,7 +38,7 @@ TOTAL_PIXELS      = CHUNKS_PER_FRAME * PIXELS_PER_CHUNK
 class IRFrameReceiver:
     """Reassembles multi-packet IR frames + parses telemetry lines."""
 
-    _TELEM_RE = re.compile(rb"(tof|fan|paused):(-?\d+)")
+    _TELEM_RE = re.compile(rb"(tof|fan|paused|track):(-?\d+)")
 
     def __init__(self, on_frame, on_telemetry=None, on_log=None):
         self._on_frame = on_frame
@@ -141,6 +141,21 @@ class SolderSentryClient:
             return
         asyncio.run_coroutine_threadsafe(
             self.send_servo(pan_deg, tilt_deg), self._loop)
+
+    async def send_track(self, enable: bool):
+        if self._client is None or not self._client.is_connected:
+            return
+        msg = f"track:{1 if enable else 0}\n".encode("ascii")
+        try:
+            await self._client.write_gatt_char(NUS_RX_UUID, msg, response=False)
+        except Exception:
+            pass
+
+    def send_track_threadsafe(self, enable: bool):
+        if self._loop is None:
+            return
+        asyncio.run_coroutine_threadsafe(
+            self.send_track(enable), self._loop)
 
 
 async def _find_device():

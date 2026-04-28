@@ -490,11 +490,11 @@ static void task_servo_ctrl(void *param)
             }
 
             /* Manual set-angle always wins: disable auto-tracking so the
-               tracker does not immediately overwrite the commanded angle. */
+               tracker does not immediately overwrite the commanded angle.
+               task_servo_ctrl_set_tracking emits track:0 for the GUI. */
             if ((msg.set_pan || msg.set_tilt) && g_servo_track_enabled)
             {
-                g_servo_track_enabled = false;
-                task_print_info("Auto-tracking disabled (manual servo command)");
+                task_servo_ctrl_set_tracking(false);
             }
 
             if (msg.set_pan)
@@ -763,7 +763,7 @@ static BaseType_t cli_handler_servo_track(
     if ((strcmp(parameter_buffer, "on") == 0) || (strcmp(parameter_buffer, "1") == 0) ||
         (strcmp(parameter_buffer, "enable") == 0))
     {
-        g_servo_track_enabled = true;
+        task_servo_ctrl_set_tracking(true);
         snprintf(pcWriteBuffer, xWriteBufferLen, "Auto-tracking enabled\r\n");
         return pdFALSE;
     }
@@ -771,7 +771,7 @@ static BaseType_t cli_handler_servo_track(
     if ((strcmp(parameter_buffer, "off") == 0) || (strcmp(parameter_buffer, "0") == 0) ||
         (strcmp(parameter_buffer, "disable") == 0))
     {
-        g_servo_track_enabled = false;
+        task_servo_ctrl_set_tracking(false);
         snprintf(pcWriteBuffer, xWriteBufferLen, "Auto-tracking disabled\r\n");
         return pdFALSE;
     }
@@ -877,6 +877,11 @@ bool task_servo_ctrl_get_tracking(void)
 
 void task_servo_ctrl_set_tracking(bool enable)
 {
+    if (g_servo_track_enabled == enable)
+    {
+        return;
+    }
     g_servo_track_enabled = enable;
-    task_print_info("Auto-tracking %s", enable ? "ON" : "OFF");
+    /* Parseable telemetry token for desktop GUI tracking dot. */
+    task_print_info("track:%u", enable ? 1u : 0u);
 }
