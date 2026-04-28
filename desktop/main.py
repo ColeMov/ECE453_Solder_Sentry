@@ -76,6 +76,7 @@ class AppState:
     tof_mm: Optional[int] = None
     fan_pct: Optional[int] = None
     paused: bool = False
+    tracking: bool = False
 
 
 _state = AppState()
@@ -112,6 +113,11 @@ class StatusDot(ctk.CTkFrame):
     def set_state(self, on: bool, label: Optional[str] = None):
         self._canvas.itemconfig(self._dot,
                                 fill=self._on_color if on else self._off_color)
+        if label is not None:
+            self._label.configure(text=label)
+
+    def set_color(self, color: str, label: Optional[str] = None):
+        self._canvas.itemconfig(self._dot, fill=color)
         if label is not None:
             self._label.configure(text=label)
 
@@ -371,13 +377,11 @@ class SolderSentryApp(ctk.CTk):
                                          off_color=GREY_500)
         self._connection_dot.pack(side="right", padx=(8, 0))
 
-        self._paused_dot = StatusDot(header, "Active",
-                                     on_color=ACCENT_RED,
-                                     off_color=GREY_500)
-        self._paused_dot.pack(side="right", padx=(8, 0))
-
-        # Tracking light: lit when board auto-tracks hottest IR pixel,
-        # dim while user is driving the joystick manually.
+        # Tri-state mode dot: green=Auto-track, grey=Manual,
+        # red=PAUSED — too close (overrides the other two while a TOF
+        # safety trip is active). Color is set per-update via
+        # itemconfig in _update_mode_dot rather than the StatusDot
+        # binary on/off because we need three colours.
         self._tracking_dot = StatusDot(header, "Manual",
                                        on_color=ACCENT_GREEN,
                                        off_color=GREY_500)
@@ -464,6 +468,15 @@ class SolderSentryApp(ctk.CTk):
         # Joystick snapped back to center — hand control back to tracker.
         self._client.send_track_threadsafe(True)
 
+    def _update_mode_dot(self):
+        # Priority: PAUSED > Auto-track > Manual.
+        if _state.paused:
+            self._tracking_dot.set_color(ACCENT_RED, "PAUSED — too close")
+        elif _state.tracking:
+            self._tracking_dot.set_color(ACCENT_GREEN, "Auto-track")
+        else:
+            self._tracking_dot.set_color(GREY_500, "Manual")
+
     def _pump_frames(self):
         try:
             while True:
@@ -489,14 +502,10 @@ class SolderSentryApp(ctk.CTk):
                         self._fan_bar.set_pct(value)
                     elif key == "paused":
                         _state.paused = bool(value)
-                        self._paused_dot.set_state(
-                            _state.paused,
-                            "PAUSED — too close" if _state.paused else "Active")
+                        self._update_mode_dot()
                     elif key == "track":
-                        tracking = bool(value)
-                        self._tracking_dot.set_state(
-                            tracking,
-                            "Auto-track" if tracking else "Manual")
+                        _state.tracking = bool(value)
+                        self._update_mode_dot()
                 elif kind == "state":
                     _state.connected = bool(payload)
                     self._connection_dot.set_state(
