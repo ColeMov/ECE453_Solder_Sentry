@@ -79,6 +79,8 @@ extern cy_stc_ble_stack_params_t stackParam;
 static void task_ble(void *param);
 static void ble_event_handler(uint32_t eventCode, void *eventParam);
 static void ble_send_notification(const char *str);
+static cy_en_ble_api_result_t ble_tx_notify_raw(
+    cy_ble_gatt_db_attr_handle_t hdl, const uint8_t *data, uint16_t len);
 static void ble_start_advertising_fast(void);
 
 static void ble_start_advertising_fast(void)
@@ -324,6 +326,13 @@ static void ble_send_notification(const char *str)
     size_t total = strlen(str);
     size_t offset = 0u;
 
+    /* Use Cy_BLE_GATTS_Notification (raw notify, no GATT-DB write back)
+     * for the same reason the IR pump uses ble_tx_notify_raw: the BT
+     * Configurator-generated DB has the TX char storage sized at 0
+     * bytes, so Cy_BLE_GATTS_SendNotification fails with
+     * INVALID_OPERATION on the first chunk and the message is dropped.
+     * That bug was the reason every fan: / track: / tof: token sent
+     * over BLE never reached the desktop GUI. */
     while (offset < total)
     {
         uint8_t chunk[BLE_NOTIF_MAX_LEN];
@@ -334,13 +343,12 @@ static void ble_send_notification(const char *str)
         }
         memcpy(chunk, str + offset, len);
 
-        cy_stc_ble_gatt_handle_value_pair_t hvp = {
-            .attrHandle = txHandle,
-            .value = { .val = chunk, .len = len }
-        };
-
-        if (Cy_BLE_GATTS_SendNotification(&ble_conn_handle, &hvp) != CY_BLE_SUCCESS)
+        if (ble_tx_notify_raw(txHandle, chunk, len) != CY_BLE_SUCCESS)
         {
+            /* Stack busy / no resources — bail and let the next loop
+             * iter drain another queue item. The leading '\n' that the
+             * console writer prepends to the next msg will flush any
+             * partial line stuck on the desktop. */
             break;
         }
         offset += len;
