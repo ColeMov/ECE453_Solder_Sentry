@@ -259,25 +259,29 @@ static void task_tof(void *param)
                              (range_status == VL53LX_RANGESTATUS_RANGE_VALID) &&
                              (distance_mm > 0);
 
-        /* TOF too-close pause only fires in manual mode. While
-         * auto-tracking is engaged the head naturally points at the
-         * iron, putting it close to the TOF sensor; tripping the
-         * pause every frame fights with the tracker's iron-present
-         * fan gate and averages the fan PWM low. The tracker's gates
-         * are the right safety check during auto-tracking. */
+        /* Too-close detection always fires the warning (voice prompt +
+         * paused:1 telemetry). Only the fan kill is suppressed while
+         * auto-tracking is on — otherwise the tracker locks onto an
+         * iron near the sensor, TOF trips every frame, and the fan
+         * gets averaged low fighting the tracker's iron-present gate.
+         * Warning still useful in tracking mode: tells the user a hand
+         * is in the danger zone even if the tracker is keeping the fan
+         * running for active soldering. */
         bool tracking_active = task_servo_ctrl_get_tracking();
 
-        if (!tracking_active && !too_close && valid_reading &&
+        if (!too_close && valid_reading &&
             ((uint16_t)distance_mm <= TOF_NEAR_ENTER_MM))
         {
             too_close = true;
             task_print_info("paused:1");
-            task_fan_set_duty(0);
             (void)task_audio_say("too_close");
+            if (!tracking_active)
+            {
+                task_fan_set_duty(0);
+            }
         }
         else if (too_close && valid_reading &&
-                 (tracking_active ||
-                  (uint16_t)distance_mm >= TOF_NEAR_LEAVE_MM))
+                 ((uint16_t)distance_mm >= TOF_NEAR_LEAVE_MM))
         {
             too_close = false;
             task_print_info("paused:0");
