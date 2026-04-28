@@ -102,7 +102,13 @@ class IRFrameReceiver:
         m = self._TELEM_RE.search(line)
         if m:
             try:
-                self._on_telemetry(m.group(1).decode("ascii"), int(m.group(2)))
+                key = m.group(1).decode("ascii")
+                value = int(m.group(2))
+                # Diagnostic: surface every parsed telemetry hit so we can
+                # tell whether the GUI just isn't reacting vs the data not
+                # arriving in the first place.
+                print(f"[telemetry] {key}={value}", flush=True)
+                self._on_telemetry(key, value)
                 return
             except ValueError:
                 pass

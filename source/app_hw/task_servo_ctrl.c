@@ -881,6 +881,16 @@ void task_servo_ctrl_set_tracking(bool enable)
     {
         return;
     }
+    /* When turning tracking back ON, drain any queued manual servo
+     * commands. Otherwise a still-pending drag cmd from BLE arrives
+     * AFTER set_tracking(true), trips the manual-override path, and
+     * flips tracking right back off — the exact race the desktop
+     * "release sends track:1" path was meant to avoid. */
+    if (enable && (q_servo_ctrl != NULL))
+    {
+        servo_ctrl_message_t drain;
+        while (xQueueReceive(q_servo_ctrl, &drain, 0u) == pdPASS) { }
+    }
     g_servo_track_enabled = enable;
     /* Parseable telemetry token for desktop GUI tracking dot. */
     task_print_info("track:%u", enable ? 1u : 0u);
