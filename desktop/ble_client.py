@@ -54,6 +54,13 @@ class IRFrameReceiver:
         if not data:
             return
 
+        # Diagnostic: dump every notification packet so we can tell
+        # whether anything is arriving from the board at all.
+        try:
+            print(f"[notif {len(data)}B] {bytes(data)!r}", flush=True)
+        except Exception:
+            pass
+
         marker = data[0]
 
         if marker == FRAME_MARKER:
@@ -97,6 +104,13 @@ class IRFrameReceiver:
     def _dispatch_line(self, line: bytes):
         if not line:
             return
+        # Diagnostic: dump every assembled line so we can tell whether
+        # BLE data is arriving at all, vs arriving but failing the
+        # telemetry regex.
+        try:
+            print(f"[line] {line!r}", flush=True)
+        except Exception:
+            pass
         # Telemetry tokens may appear anywhere in the line (the print
         # framework prefixes things like "[Info] : ToF :"). Find them.
         m = self._TELEM_RE.search(line)
@@ -104,9 +118,6 @@ class IRFrameReceiver:
             try:
                 key = m.group(1).decode("ascii")
                 value = int(m.group(2))
-                # Diagnostic: surface every parsed telemetry hit so we can
-                # tell whether the GUI just isn't reacting vs the data not
-                # arriving in the first place.
                 print(f"[telemetry] {key}={value}", flush=True)
                 self._on_telemetry(key, value)
                 return
