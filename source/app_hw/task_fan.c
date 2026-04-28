@@ -107,6 +107,7 @@ void task_fan_set_duty(uint8_t duty_pct)
     }
 
     g_fan_duty = duty_pct;
+    task_print_info("fan:%u", (unsigned)duty_pct);
 }
 
 uint8_t task_fan_get_duty(void)

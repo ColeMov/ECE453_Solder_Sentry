@@ -2,62 +2,61 @@
 ble_client.py — BLE client for ECE453 Solder Sentry.
 
 Connects to the board (advertises as "ECE453"), enables notifications on the
-NUS TX characteristic, and reassembles the IR frame packets sent by the firmware.
+NUS TX characteristic, and dispatches:
 
-Protocol (matches task_ble.c):
-  Header packet (20 bytes):
-    [0]    = 0xAA  (frame-start marker)
-    [1]    = frame sequence number
-    [2:3]  = thermistor as int16, big-endian, units = 0.0625 °C/LSB
-    [4:19] = padding
+  * IR frames (binary protocol, 0xAA header + 8 × 0xBB chunks per frame)
+  * Telemetry text lines emitted by the firmware via task_print_info:
+        tof:<mm>     – TOF distance in millimetres
+        fan:<pct>    – Fan duty cycle 0–100 %
+        paused:0|1   – TOF safety state (1 = fan killed, too close)
+        any other    – generic log line
 
-  Data packets (8 total, 20 bytes each):
-    [0]    = 0xBB  (data marker)
-    [1]    = chunk index (0-7)
-    [2:17] = 8 pixels as int16, big-endian, units = 0.25 °C/LSB
-    [18:19]= padding
+Outbound:
+  * `send_servo(pan_deg, tilt_deg)` writes "servo:<pan>,<tilt>\\n" to NUS RX.
 """
 
 import asyncio
 import struct
+import re
 import numpy as np
 from bleak import BleakClient, BleakScanner
 
 DEVICE_NAME       = "ECE453"
+NUS_SERVICE_UUID  = "6e400001-b5a3-f393-e0a9-e50e24dcca9e"
 NUS_TX_UUID       = "6e400003-b5a3-f393-e0a9-e50e24dcca9e"
 NUS_RX_UUID       = "6e400002-b5a3-f393-e0a9-e50e24dcca9e"
 
 FRAME_MARKER      = 0xAA
 DATA_MARKER       = 0xBB
-THERM_LSB         = 0.0625   # °C per LSB for thermistor
-PIXEL_LSB         = 0.25     # °C per LSB for pixels
+THERM_LSB         = 0.0625
+PIXEL_LSB         = 0.25
 CHUNKS_PER_FRAME  = 8
 PIXELS_PER_CHUNK  = 8
-TOTAL_PIXELS      = CHUNKS_PER_FRAME * PIXELS_PER_CHUNK  # 64
+TOTAL_PIXELS      = CHUNKS_PER_FRAME * PIXELS_PER_CHUNK
 
 
 class IRFrameReceiver:
-    """Reassembles multi-packet IR frames from BLE notifications."""
+    """Reassembles multi-packet IR frames + parses telemetry lines."""
 
-    def __init__(self, on_frame):
-        """
-        Args:
-            on_frame: callback(thermistor_c: float, grid: np.ndarray[8,8])
-        """
+    _TELEM_RE = re.compile(rb"(tof|fan|paused):(-?\d+)")
+
+    def __init__(self, on_frame, on_telemetry=None, on_log=None):
         self._on_frame = on_frame
+        self._on_telemetry = on_telemetry or (lambda k, v: None)
+        self._on_log = on_log or (lambda s: None)
         self._pending_seq = None
         self._thermistor_c = 0.0
         self._pixels = np.zeros(TOTAL_PIXELS, dtype=np.float32)
         self._chunks_received = set()
+        self._line_buf = bytearray()
 
     def handle_notification(self, _handle, data: bytearray):
-        if len(data) < 2:
+        if not data:
             return
 
         marker = data[0]
 
         if marker == FRAME_MARKER:
-            # New frame — reset state
             seq = data[1]
             raw_therm = struct.unpack_from(">h", data, 2)[0]
             self._pending_seq = seq
@@ -69,24 +68,83 @@ class IRFrameReceiver:
             chunk_idx = data[1]
             if chunk_idx >= CHUNKS_PER_FRAME or len(data) < 2 + PIXELS_PER_CHUNK * 2:
                 return
-
             base = chunk_idx * PIXELS_PER_CHUNK
             for p in range(PIXELS_PER_CHUNK):
                 raw = struct.unpack_from(">h", data, 2 + p * 2)[0]
                 self._pixels[base + p] = raw * PIXEL_LSB
-
             self._chunks_received.add(chunk_idx)
-
             if len(self._chunks_received) == CHUNKS_PER_FRAME:
                 grid = self._pixels.reshape(8, 8).copy()
                 self._on_frame(self._thermistor_c, grid)
                 self._pending_seq = None
 
+        else:
+            # Treat as ASCII log/telemetry; firmware splits messages with \n.
+            self._line_buf.extend(data)
+            while b"\n" in self._line_buf or b"\r" in self._line_buf:
+                # Find earliest delimiter
+                nl = self._line_buf.find(b"\n")
+                cr = self._line_buf.find(b"\r")
+                idx = min(x for x in (nl, cr) if x >= 0)
+                line = bytes(self._line_buf[:idx])
+                # Drop the delimiter (and a paired \r\n if present)
+                drop = 1
+                if idx + 1 < len(self._line_buf) and self._line_buf[idx:idx+2] in (b"\r\n", b"\n\r"):
+                    drop = 2
+                del self._line_buf[:idx + drop]
+                self._dispatch_line(line)
 
-NUS_SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e"
+    def _dispatch_line(self, line: bytes):
+        if not line:
+            return
+        # Telemetry tokens may appear anywhere in the line (the print
+        # framework prefixes things like "[Info] : ToF :"). Find them.
+        m = self._TELEM_RE.search(line)
+        if m:
+            try:
+                self._on_telemetry(m.group(1).decode("ascii"), int(m.group(2)))
+                return
+            except ValueError:
+                pass
+        try:
+            self._on_log(line.decode("utf-8", errors="replace"))
+        except Exception:
+            pass
 
-async def find_device():
-    print(f"Scanning for '{DEVICE_NAME}' by name or NUS UUID...")
+
+class SolderSentryClient:
+    """Connection wrapper exposing send_servo() + state callbacks."""
+
+    def __init__(self, on_frame, on_telemetry=None, on_log=None,
+                 on_state=None):
+        self._receiver = IRFrameReceiver(on_frame, on_telemetry, on_log)
+        self._on_state = on_state or (lambda connected: None)
+        self._client = None
+        self._loop = None
+        self._connected = False
+
+    @property
+    def connected(self) -> bool:
+        return self._connected
+
+    async def send_servo(self, pan_deg: int, tilt_deg: int):
+        if self._client is None or not self._client.is_connected:
+            return
+        msg = f"servo:{int(pan_deg)},{int(tilt_deg)}\n".encode("ascii")
+        try:
+            await self._client.write_gatt_char(NUS_RX_UUID, msg, response=False)
+        except Exception:
+            pass
+
+    def send_servo_threadsafe(self, pan_deg: int, tilt_deg: int):
+        if self._loop is None:
+            return
+        asyncio.run_coroutine_threadsafe(
+            self.send_servo(pan_deg, tilt_deg), self._loop)
+
+
+async def _find_device():
+    print(f"Scanning for '{DEVICE_NAME}'...")
     def _match(d, adv):
         if d.name and DEVICE_NAME.lower() in d.name.lower():
             return True
@@ -95,32 +153,47 @@ async def find_device():
         if NUS_SERVICE_UUID in (adv.service_uuids or []):
             return True
         return False
-
     device = await BleakScanner.find_device_by_filter(_match, timeout=15.0)
-    if device is not None:
-        print(f"Found: {device.name!r} [{device.address}]")
-        return device
+    if device is None:
+        raise RuntimeError(
+            f"Device '{DEVICE_NAME}' not found. Toggle macOS Bluetooth and retry."
+        )
+    print(f"Found: {device.name!r} [{device.address}]")
+    return device
 
-    raise RuntimeError(
-        f"Device '{DEVICE_NAME}' not found. Toggle macOS Bluetooth off/on and retry."
-    )
+
+async def run_ble(client_obj: "SolderSentryClient", stop_event: asyncio.Event):
+    """Connect + stream until stop_event is set. Auto-reconnects on drop."""
+    client_obj._loop = asyncio.get_running_loop()
+    while not stop_event.is_set():
+        try:
+            device = await _find_device()
+            async with BleakClient(device) as client:
+                client_obj._client = client
+                client_obj._connected = True
+                client_obj._on_state(True)
+                print("Connected. Enabling notifications...")
+                await client.start_notify(
+                    NUS_TX_UUID, client_obj._receiver.handle_notification)
+                while client.is_connected and not stop_event.is_set():
+                    await asyncio.sleep(0.5)
+                await client.stop_notify(NUS_TX_UUID)
+        except Exception as e:
+            print(f"BLE error: {e}")
+        finally:
+            client_obj._client = None
+            client_obj._connected = False
+            client_obj._on_state(False)
+        if not stop_event.is_set():
+            print("Reconnecting in 2 s...")
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=2.0)
+            except asyncio.TimeoutError:
+                pass
+    print("BLE loop exited.")
 
 
-async def run_ble(on_frame, stop_event: asyncio.Event):
-    """Connect to the board and stream IR frames until stop_event is set."""
-    device = await find_device()
-    receiver = IRFrameReceiver(on_frame)
-
-    async with BleakClient(device) as client:
-        print("Connected. Enabling notifications...")
-        # List services/characteristics for debugging
-        for svc in client.services:
-            print(f"  SVC {svc.uuid}")
-            for ch in svc.characteristics:
-                print(f"    CHAR {ch.uuid} props={ch.properties}")
-        await client.start_notify(NUS_TX_UUID, receiver.handle_notification)
-        print("Streaming IR data. Close the window to stop.")
-        await stop_event.wait()
-        await client.stop_notify(NUS_TX_UUID)
-
-    print("Disconnected.")
+# ── Backwards-compat shim for the old `run_ble(on_frame, stop_event)` API ──
+async def run_ble_compat(on_frame, stop_event: asyncio.Event):
+    client = SolderSentryClient(on_frame=on_frame)
+    await run_ble(client, stop_event)

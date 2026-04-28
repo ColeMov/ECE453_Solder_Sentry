@@ -247,12 +247,11 @@ static void task_tof(void *param)
             range_status = data.RangeData[0].RangeStatus;
         }
 
-        if ((poll_count % 4u) == 0u)
+        /* Stream parseable telemetry: 'tof:<mm>' on every successful read.
+         * Desktop GUI parses it for the distance bar. */
+        if (distance_mm >= 0)
         {
-            task_print_info("ToF: status=%d objs=%u dist=%d rs=%u",
-                            (int)status,
-                            (unsigned)data.NumberOfObjectsFound,
-                            (int)distance_mm, (unsigned)range_status);
+            task_print_info("tof:%d", (int)distance_mm);
         }
 
         bool valid_reading = (status == VL53LX_ERROR_NONE) &&
@@ -262,20 +261,16 @@ static void task_tof(void *param)
         if (!too_close && valid_reading &&
             ((uint16_t)distance_mm <= TOF_NEAR_ENTER_MM))
         {
-            /* Crossed in: kill fan, alert. */
             too_close = true;
-            task_print_warning("ToF: TOO CLOSE (%d mm) — killing fan + alerting",
-                               (int)distance_mm);
+            task_print_info("paused:1");
             task_fan_set_duty(0);
             (void)task_audio_say("too_close");
         }
         else if (too_close && valid_reading &&
                  ((uint16_t)distance_mm >= TOF_NEAR_LEAVE_MM))
         {
-            /* Crossed out: restore fan, clear alert. */
             too_close = false;
-            task_print_info("ToF: clear (%d mm) — restoring fan to %u%%",
-                            (int)distance_mm, (unsigned)TOF_FAN_RESUME_DUTY);
+            task_print_info("paused:0");
             task_fan_set_duty(TOF_FAN_RESUME_DUTY);
         }
 
