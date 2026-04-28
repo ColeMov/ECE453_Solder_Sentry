@@ -107,12 +107,16 @@ void task_tof_init(void)
         return;
     }
 
+    /* Higher than the servo control task (configMAX_PRIORITIES - 5) so the
+     * TOF poll wins the race when the IR-tracker is active. The servo
+     * tracker only needs to update twice a second; TOF must hit its data-
+     * ready window or the read times out. */
     xTaskCreate(
         task_tof,
         "ToF",
         6 * configMINIMAL_STACK_SIZE,
         NULL,
-        configMAX_PRIORITIES - 6,
+        configMAX_PRIORITIES - 4,
         NULL);
 }
 
