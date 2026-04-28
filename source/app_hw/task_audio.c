@@ -29,7 +29,6 @@ static bool g_audio_i2c_ready = false;
 
 static cyhal_dac_t g_audio_dac;
 static bool g_audio_dac_ready = false;
-static volatile bool g_audio_play_busy = false;
 
 /* Tone generator state. The CLI 'audio tone' starts a one-shot FreeRTOS task
  * that toggles the DAC at audio rate to produce a square wave for a fixed
@@ -82,7 +81,6 @@ static void task_audio_play(void *param)
     cyhal_dac_write(&g_audio_dac, 32768u);
     task_print_info("audio: clip '%s' done (%lu samples)",
                     name ? name : "?", (unsigned long)len);
-    g_audio_play_busy = false;
     vTaskDelete(NULL);
 }
 
@@ -108,13 +106,6 @@ static cy_rslt_t audio_dispatch_clip(const int16_t *pcm, uint32_t len, const cha
     {
         return CY_RSLT_TYPE_ERROR;
     }
-    /* Drop the request if a clip is already playing — prevents two
-     * busy-wait playback tasks from running concurrently and stomping
-     * on each other's DAC writes (which sounds like glitchy garbage). */
-    if (g_audio_play_busy)
-    {
-        return CY_RSLT_TYPE_ERROR;
-    }
     audio_clip_play_t *p = pvPortMalloc(sizeof(*p));
     if (p == NULL)
     {
@@ -123,16 +114,11 @@ static cy_rslt_t audio_dispatch_clip(const int16_t *pcm, uint32_t len, const cha
     p->pcm = pcm;
     p->len = len;
     p->name = name;
-    g_audio_play_busy = true;
-    /* Highest priority while playing so no other task preempts the
-     * cyhal_system_delay_us busy-wait that drives DAC sample timing.
-     * Playback is short (~1-2 s) so blocking other tasks briefly is OK. */
     BaseType_t ok = xTaskCreate(task_audio_play, "AudPlay",
                                 3 * configMINIMAL_STACK_SIZE,
-                                p, configMAX_PRIORITIES - 1, NULL);
+                                p, tskIDLE_PRIORITY + 2, NULL);
     if (ok != pdPASS)
     {
-        g_audio_play_busy = false;
         vPortFree(p);
         return CY_RSLT_TYPE_ERROR;
     }
