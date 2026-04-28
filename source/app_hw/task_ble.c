@@ -310,7 +310,12 @@ static void ble_event_handler(uint32_t eventCode, void *eventParam)
 
 static void ble_send_notification(const char *str)
 {
-    if ((str == NULL) || !ble_connected || !notifications_enabled)
+    /* Don't gate on notifications_enabled: the CCCD WRITE_REQ event
+     * doesn't always fire / match the expected attrHandle on this BSP,
+     * yet IR frames go through fine because they share the same TX
+     * notification path. If the central isn't actually subscribed the
+     * stack will refuse the notify itself. */
+    if ((str == NULL) || !ble_connected)
     {
         return;
     }
@@ -521,15 +526,13 @@ static void task_ble(void *param)
                 dbg_frames_ok = 0u;
 
                 /* Heartbeat snapshot of slow-changing state so the GUI
-                 * always converges even if the CCCD-subscribe push
-                 * raced subscription on the central side. */
-                if (notifications_enabled)
-                {
-                    task_print_info("fan:%u",
-                                    (unsigned)task_fan_get_duty());
-                    task_print_info("track:%u",
-                                    task_servo_ctrl_get_tracking() ? 1u : 0u);
-                }
+                 * always converges. Don't gate on notifications_enabled —
+                 * that flag tracks the CCCD-write event which isn't
+                 * reliable on this BSP; just trust ble_connected. */
+                task_print_info("fan:%u",
+                                (unsigned)task_fan_get_duty());
+                task_print_info("track:%u",
+                                task_servo_ctrl_get_tracking() ? 1u : 0u);
             }
         }
 
