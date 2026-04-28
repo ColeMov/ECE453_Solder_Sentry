@@ -14,6 +14,7 @@
 #include "task_blink.h"
 #include "task_ble.h"
 #include "task_audio.h"
+#include "task_fan.h"
 #include "ece453_pins.h"
 
 #include "cyhal_gpio.h"
@@ -31,7 +32,21 @@ static void captouch_on_long_press(uint32_t held_ms);
 
 static void captouch_on_short_press(uint32_t held_ms)
 {
-    task_print_info("CapTouch: short press (%lu ms)", (unsigned long)held_ms);
+    /* Toggle fan: any non-zero duty -> off, off -> 100 %. Lets the user
+     * cut the fan instantly with a quick tap. */
+    uint8_t cur = task_fan_get_duty();
+    if (cur > 0u)
+    {
+        task_print_info("CapTouch: short press (%lu ms) — fan OFF",
+                        (unsigned long)held_ms);
+        task_fan_set_duty(0u);
+    }
+    else
+    {
+        task_print_info("CapTouch: short press (%lu ms) — fan 100%%",
+                        (unsigned long)held_ms);
+        task_fan_set_duty(100u);
+    }
 }
 
 static void captouch_on_long_press(uint32_t held_ms)
