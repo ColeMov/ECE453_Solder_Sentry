@@ -253,9 +253,11 @@ static void task_tof(void *param)
             range_status = data.RangeData[0].RangeStatus;
         }
 
-        /* Stream parseable telemetry: 'tof:<mm>' on every successful read.
-         * Desktop GUI parses it for the distance bar. */
-        if (distance_mm >= 0)
+        /* Stream parseable telemetry: throttled to ~5 Hz so the BLE
+         * notify queue + DAC playback don't get swamped by 50 Hz TOF
+         * polls. Always emit on the first read after a state transition
+         * by tracking the previous bucket. */
+        if (distance_mm >= 0 && (poll_count % 10u) == 0u)
         {
             task_print_info("tof:%d", (int)distance_mm);
         }
