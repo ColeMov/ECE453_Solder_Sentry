@@ -519,6 +519,17 @@ static void task_ble(void *param)
                 dbg_ir_queue_hits = 0u;
                 dbg_frames_attempted = 0u;
                 dbg_frames_ok = 0u;
+
+                /* Heartbeat snapshot of slow-changing state so the GUI
+                 * always converges even if the CCCD-subscribe push
+                 * raced subscription on the central side. */
+                if (notifications_enabled)
+                {
+                    task_print_info("fan:%u",
+                                    (unsigned)task_fan_get_duty());
+                    task_print_info("track:%u",
+                                    task_servo_ctrl_get_tracking() ? 1u : 0u);
+                }
             }
         }
 

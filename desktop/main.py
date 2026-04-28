@@ -294,7 +294,11 @@ class Joystick(ctk.CTkFrame):
         self._cx = self.SIZE / 2
         self._cy = self.SIZE / 2
         self._draw_pad()
-        self._on_change(SERVO_PAN_CENTER, SERVO_TILT_CENTER)
+        # Don't send a center-position servo cmd — that races track:1 on
+        # the board (the queued servo cmd hits the auto-disable path
+        # AFTER track:1 enabled tracking, flipping it back off). Just
+        # update the readout and hand control back to the tracker via
+        # the release callback.
         self._readout.configure(
             text=f"pan {SERVO_PAN_CENTER}°  tilt {SERVO_TILT_CENTER}°")
         self._release_cb()
