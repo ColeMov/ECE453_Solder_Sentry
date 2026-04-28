@@ -7,12 +7,20 @@
 #include "task_console.h"
 #include "FreeRTOS_CLI.h"
 #include "cyhal_pwm.h"
+#include "cyhal_gpio.h"
 #include <stdlib.h>
 #include <string.h>
 
 #define FAN_PWM_PIN          P10_2
 #define FAN_PWM_FREQUENCY_HZ (25000u)
 #define FAN_DEFAULT_DUTY     (100u)
+
+/* Active-high enable line tied to a power MOSFET on the fan V+ rail.
+ * Drive HIGH to power the fan, LOW to fully kill it. Reuses the IR
+ * sensor's INT pin (P5.4) which is unused in firmware (IR is polled). */
+#define FAN_EN_PIN           P5_4
+#define FAN_EN_ACTIVE        (1u)
+#define FAN_EN_INACTIVE      (0u)
 
 /* Intel-spec 4-pin PC fans treat "no PWM edges" as a signal-loss failsafe
  * and run at full speed. Drive a low-but-nonzero duty so `fan 0` still
@@ -75,10 +83,18 @@ void task_fan_set_duty(uint8_t duty_pct)
     {
         duty_pct = 100u;
     }
-    if (duty_pct < FAN_MIN_DUTY)
+
+    /* duty 0 → cut V+ via the EN MOSFET. Fan stops dead, no failsafe
+     * spin-up. PWM line value doesn't matter while EN is low. */
+    if (duty_pct == 0u)
     {
-        duty_pct = FAN_MIN_DUTY;
+        cyhal_gpio_write(FAN_EN_PIN, FAN_EN_INACTIVE);
+        g_fan_duty = 0u;
+        return;
     }
+
+    /* Non-zero duty: ensure EN is asserted, then set PWM duty. */
+    cyhal_gpio_write(FAN_EN_PIN, FAN_EN_ACTIVE);
 
     cy_rslt_t rslt = cyhal_pwm_set_duty_cycle(&g_fan_pwm,
                                               (float)duty_pct,
@@ -100,7 +116,16 @@ uint8_t task_fan_get_duty(void)
 
 void task_fan_init(void)
 {
-    cy_rslt_t rslt = cyhal_pwm_init(&g_fan_pwm, FAN_PWM_PIN, NULL);
+    /* EN pin first so the MOSFET stays off through PWM bring-up. */
+    cy_rslt_t rslt = cyhal_gpio_init(FAN_EN_PIN, CYHAL_GPIO_DIR_OUTPUT,
+                                     CYHAL_GPIO_DRIVE_STRONG, FAN_EN_INACTIVE);
+    if (rslt != CY_RSLT_SUCCESS)
+    {
+        task_print_error("fan: en_pin init failed (0x%08lX)", (unsigned long)rslt);
+        return;
+    }
+
+    rslt = cyhal_pwm_init(&g_fan_pwm, FAN_PWM_PIN, NULL);
     if (rslt != CY_RSLT_SUCCESS)
     {
         task_print_error("fan: pwm_init failed (0x%08lX)", (unsigned long)rslt);
@@ -126,9 +151,12 @@ void task_fan_init(void)
     g_fan_duty = FAN_DEFAULT_DUTY;
     g_fan_ready = true;
 
+    /* EN high now that PWM is producing a valid signal. */
+    cyhal_gpio_write(FAN_EN_PIN, FAN_EN_ACTIVE);
+
     FreeRTOS_CLIRegisterCommand(&xFan);
 
-    task_print_info("fan: PWM up on P10.2 @ %lu Hz, duty %u%%",
+    task_print_info("fan: PWM up on P10.2 @ %lu Hz, EN=P5.4, duty %u%%",
                     (unsigned long)FAN_PWM_FREQUENCY_HZ,
                     (unsigned)FAN_DEFAULT_DUTY);
 }

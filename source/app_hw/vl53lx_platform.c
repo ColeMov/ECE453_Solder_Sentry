@@ -34,15 +34,15 @@ static VL53LX_Error vl53lx_write(uint16_t index, const uint8_t *pdata, uint32_t 
         memcpy(&buffer[2], pdata, count);
     }
 
-    xSemaphoreTake(Semaphore_I2C, portMAX_DELAY);
+    xSemaphoreTake(Semaphore_I2C_site2, portMAX_DELAY);
     rslt = cyhal_i2c_master_write(
-        &i2c_master_obj,
+        &i2c_master_obj_site2,
         VL53LX_I2C_ADDR_7BIT,
         buffer,
         (uint16_t)total,
         0,
         true);
-    xSemaphoreGive(Semaphore_I2C);
+    xSemaphoreGive(Semaphore_I2C_site2);
 
     return (rslt == CY_RSLT_SUCCESS) ? VL53LX_ERROR_NONE : VL53LX_ERROR_CONTROL_INTERFACE;
 }
@@ -55,9 +55,9 @@ static VL53LX_Error vl53lx_read(uint16_t index, uint8_t *pdata, uint32_t count)
     index_buf[0] = (uint8_t)((index >> 8) & 0xFF);
     index_buf[1] = (uint8_t)(index & 0xFF);
 
-    xSemaphoreTake(Semaphore_I2C, portMAX_DELAY);
+    xSemaphoreTake(Semaphore_I2C_site2, portMAX_DELAY);
     rslt = cyhal_i2c_master_write(
-        &i2c_master_obj,
+        &i2c_master_obj_site2,
         VL53LX_I2C_ADDR_7BIT,
         index_buf,
         2,
@@ -67,14 +67,14 @@ static VL53LX_Error vl53lx_read(uint16_t index, uint8_t *pdata, uint32_t count)
     if (rslt == CY_RSLT_SUCCESS)
     {
         rslt = cyhal_i2c_master_read(
-            &i2c_master_obj,
+            &i2c_master_obj_site2,
             VL53LX_I2C_ADDR_7BIT,
             pdata,
             (uint16_t)count,
             0,
             true);
     }
-    xSemaphoreGive(Semaphore_I2C);
+    xSemaphoreGive(Semaphore_I2C_site2);
 
     return (rslt == CY_RSLT_SUCCESS) ? VL53LX_ERROR_NONE : VL53LX_ERROR_CONTROL_INTERFACE;
 }
