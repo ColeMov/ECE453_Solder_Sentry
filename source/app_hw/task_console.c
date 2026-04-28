@@ -341,13 +341,20 @@ void task_debug_printf(debug_message_type_t message_type, char *str_ptr, ...)
         message_data.message_type = message_type;
         message_data.str_ptr = message_buffer;
 
-        /* Forward a copy to the BLE notification queue (non-blocking, best-effort) */
+        /* Forward a copy to the BLE notification queue (non-blocking, best-effort).
+         * Append "\n" so the desktop can split notification packets back into
+         * lines — without a delimiter the line buffer accumulates forever and
+         * regex telemetry parsing (tof/fan/track/...) never fires. */
 #ifdef COMPONENT_BLESS
         if (q_ble_tx != NULL && message_type != none)
         {
             ble_tx_item_t ble_item;
-            strncpy(ble_item.msg, message_buffer, sizeof(ble_item.msg) - 1u);
-            ble_item.msg[sizeof(ble_item.msg) - 1u] = '\0';
+            size_t copy_max = sizeof(ble_item.msg) - 2u;
+            strncpy(ble_item.msg, message_buffer, copy_max);
+            ble_item.msg[copy_max] = '\0';
+            size_t copied = strlen(ble_item.msg);
+            ble_item.msg[copied] = '\n';
+            ble_item.msg[copied + 1u] = '\0';
             xQueueSendToBack(q_ble_tx, &ble_item, 0u);
         }
 #endif /* COMPONENT_BLESS */
