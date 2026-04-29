@@ -30,10 +30,10 @@
 #define CAPTOUCH_LONG_HOLD_MIN_MS  (1500u)
 /* Two short taps within this window = soft-reset the PSoC. Equivalent
  * to pressing the kit's reset button — used for recovery without
- * having to physically reach the board. Wide window (5 s) because
- * the captouch pad is awkward to hit twice in quick succession on
- * the assembled enclosure. */
-#define CAPTOUCH_DOUBLE_TAP_MS     (5000u)
+ * having to physically reach the board. 2.5 s gives enough room for
+ * an awkward second tap on the assembled pad without making every
+ * normal second toggle accidentally trip the reset. */
+#define CAPTOUCH_DOUBLE_TAP_MS     (2500u)
 
 static void captouch_on_short_press(uint32_t held_ms);
 static void captouch_on_long_press(uint32_t held_ms);
