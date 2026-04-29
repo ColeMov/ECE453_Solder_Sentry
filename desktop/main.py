@@ -259,6 +259,9 @@ class Joystick(ctk.CTkFrame):
         self._on_change = on_change
         self._grab_cb = on_grab or (lambda: None)
         self._release_cb = on_release or (lambda: None)
+        # Locked by default — user must flip the switch to drive servos.
+        # Init before _draw_pad runs (it reads this attr).
+        self._locked = True
 
         # Title row with lock toggle
         head = ctk.CTkFrame(self, fg_color=GREY_800)
