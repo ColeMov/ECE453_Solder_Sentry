@@ -531,6 +531,11 @@ class SolderSentryApp(ctk.CTk):
         # Joystick snapped back to center — hand control back to tracker.
         self._client.send_track_threadsafe(True)
 
+    def _on_track_toggle(self):
+        # Track-card switch: send the new state to the board.
+        enable = self._track_switch.get() == 1
+        self._client.send_track_threadsafe(enable)
+
     def _update_mode_dot(self):
         # Priority: PAUSED > Auto-track > Manual.
         if _state.paused:
