@@ -341,13 +341,28 @@ void task_debug_printf(debug_message_type_t message_type, char *str_ptr, ...)
         message_data.message_type = message_type;
         message_data.str_ptr = message_buffer;
 
-        /* Forward a copy to the BLE notification queue (non-blocking, best-effort) */
+        /* Forward a copy to the BLE notification queue (non-blocking,
+         * best-effort). Wrap each message with leading + trailing '\n'.
+         *
+         * - Trailing '\n' lets the desktop flush a complete line.
+         * - Leading '\n' guards against partial sends: ble_send_notification
+         *   chunks at 20 bytes per BLE packet and breaks on stack-busy
+         *   without retrying. If only some chunks of a previous message
+         *   reached the central, the next message's leading '\n' terminates
+         *   the orphaned fragment so the regex parser doesn't choke on a
+         *   concatenation of two lines.
+         */
 #ifdef COMPONENT_BLESS
         if (q_ble_tx != NULL && message_type != none)
         {
             ble_tx_item_t ble_item;
-            strncpy(ble_item.msg, message_buffer, sizeof(ble_item.msg) - 1u);
-            ble_item.msg[sizeof(ble_item.msg) - 1u] = '\0';
+            size_t copy_max = sizeof(ble_item.msg) - 3u;
+            ble_item.msg[0] = '\n';
+            strncpy(ble_item.msg + 1u, message_buffer, copy_max);
+            ble_item.msg[copy_max + 1u] = '\0';
+            size_t copied = strlen(ble_item.msg);
+            ble_item.msg[copied] = '\n';
+            ble_item.msg[copied + 1u] = '\0';
             xQueueSendToBack(q_ble_tx, &ble_item, 0u);
         }
 #endif /* COMPONENT_BLESS */

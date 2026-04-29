@@ -76,6 +76,7 @@ class AppState:
     tof_mm: Optional[int] = None
     fan_pct: Optional[int] = None
     paused: bool = False
+    tracking: bool = False
 
 
 _state = AppState()
@@ -115,8 +116,7 @@ class StatusDot(ctk.CTkFrame):
         if label is not None:
             self._label.configure(text=label)
 
-    def set_dot_color(self, color: str, label: Optional[str] = None):
-        """Tri-state / arbitrary colour override (used for BLE pairing)."""
+    def set_color(self, color: str, label: Optional[str] = None):
         self._canvas.itemconfig(self._dot, fill=color)
         if label is not None:
             self._label.configure(text=label)
@@ -254,10 +254,11 @@ class Joystick(ctk.CTkFrame):
     SIZE = 200
     DOT_R = 18
 
-    def __init__(self, master, on_change):
+    def __init__(self, master, on_change, on_grab=None, on_release=None):
         super().__init__(master, fg_color=GREY_800, corner_radius=24)
         self._on_change = on_change
-        self._locked = True   # safe default: motors locked on launch
+        self._grab_cb = on_grab or (lambda: None)
+        self._release_cb = on_release or (lambda: None)
 
         # Title row with lock toggle
         head = ctk.CTkFrame(self, fg_color=GREY_800)
@@ -321,8 +322,7 @@ class Joystick(ctk.CTkFrame):
                                     fill=thumb_color, outline="")
 
     def _on_press(self, e):
-        if self._locked:
-            return
+        self._grab_cb()
         self._move_to(e.x, e.y)
 
     def _on_drag(self, e):
@@ -336,9 +336,14 @@ class Joystick(ctk.CTkFrame):
         self._cx = self.SIZE / 2
         self._cy = self.SIZE / 2
         self._draw_pad()
-        self._on_change(SERVO_PAN_CENTER, SERVO_TILT_CENTER)
+        # Don't send a center-position servo cmd — that races track:1 on
+        # the board (the queued servo cmd hits the auto-disable path
+        # AFTER track:1 enabled tracking, flipping it back off). Just
+        # update the readout and hand control back to the tracker via
+        # the release callback.
         self._readout.configure(
             text=f"pan {SERVO_PAN_CENTER}°  tilt {SERVO_TILT_CENTER}°")
+        self._release_cb()
 
     def _move_to(self, x, y):
         s = self.SIZE
@@ -408,10 +413,15 @@ class SolderSentryApp(ctk.CTk):
                                          off_color=GREY_500)
         self._connection_dot.pack(side="right", padx=(8, 0))
 
-        self._paused_dot = StatusDot(header, "Active",
-                                     on_color=ACCENT_RED,
-                                     off_color=GREY_500)
-        self._paused_dot.pack(side="right", padx=(8, 0))
+        # Tri-state mode dot: green=Auto-track, grey=Manual,
+        # red=PAUSED — too close (overrides the other two while a TOF
+        # safety trip is active). Color is set per-update via
+        # itemconfig in _update_mode_dot rather than the StatusDot
+        # binary on/off because we need three colours.
+        self._tracking_dot = StatusDot(header, "Manual",
+                                       on_color=ACCENT_GREEN,
+                                       off_color=GREY_500)
+        self._tracking_dot.pack(side="right", padx=(8, 0))
 
         # Left: thermal heatmap
         left = ctk.CTkFrame(self, fg_color=GREY_800, corner_radius=20)
@@ -460,7 +470,10 @@ class SolderSentryApp(ctk.CTk):
         self._fan_bar = FanBar(right, "Fan")
         self._fan_bar.grid(row=1, column=0, sticky="ew", pady=(0, 12))
 
-        self._joystick = Joystick(right, on_change=self._on_servo_change)
+        self._joystick = Joystick(right,
+                                  on_change=self._on_servo_change,
+                                  on_grab=self._on_joystick_grab,
+                                  on_release=self._on_joystick_release)
         self._joystick.grid(row=2, column=0, sticky="ew", pady=(0, 12))
 
         # Auto-tracking toggle card
@@ -507,10 +520,22 @@ class SolderSentryApp(ctk.CTk):
     def _on_servo_change(self, pan_deg: int, tilt_deg: int):
         self._client.send_servo_threadsafe(pan_deg, tilt_deg)
 
-    def _on_track_toggle(self):
-        on = self._track_switch.get() == 1
-        self._track_switch.configure(text="Enabled" if on else "Disabled")
-        self._client.send_text_threadsafe(f"track:{1 if on else 0}\n")
+    def _on_joystick_grab(self):
+        # User taking manual control — kill auto-tracking until release.
+        self._client.send_track_threadsafe(False)
+
+    def _on_joystick_release(self):
+        # Joystick snapped back to center — hand control back to tracker.
+        self._client.send_track_threadsafe(True)
+
+    def _update_mode_dot(self):
+        # Priority: PAUSED > Auto-track > Manual.
+        if _state.paused:
+            self._tracking_dot.set_color(ACCENT_RED, "PAUSED — too close")
+        elif _state.tracking:
+            self._tracking_dot.set_color(ACCENT_GREEN, "Auto-track")
+        else:
+            self._tracking_dot.set_color(GREY_500, "Manual")
 
     def _pump_frames(self):
         try:
@@ -537,21 +562,10 @@ class SolderSentryApp(ctk.CTk):
                         self._fan_bar.set_pct(value)
                     elif key == "paused":
                         _state.paused = bool(value)
-                        self._paused_dot.set_state(
-                            _state.paused,
-                            "PAUSED — too close" if _state.paused else "Active")
+                        self._update_mode_dot()
                     elif key == "track":
-                        on = bool(value)
-                        # Sync GUI switch + status without firing toggle handler
-                        self._track_status.configure(
-                            text="ON" if on else "OFF",
-                            text_color=ACCENT_GREEN if on else GREY_500)
-                        if on and self._track_switch.get() == 0:
-                            self._track_switch.select()
-                            self._track_switch.configure(text="Enabled")
-                        elif not on and self._track_switch.get() == 1:
-                            self._track_switch.deselect()
-                            self._track_switch.configure(text="Disabled")
+                        _state.tracking = bool(value)
+                        self._update_mode_dot()
                 elif kind == "state":
                     s = payload
                     _state.connected = (s == "connected")

@@ -267,25 +267,82 @@ static void task_tof(void *param)
          * even with the right distance. We just want a real number. */
         bool valid_reading = (status == VL53LX_ERROR_NONE) && (distance_mm > 0);
 
-        if (!too_close && valid_reading &&
-            ((uint16_t)distance_mm <= TOF_NEAR_ENTER_MM))
+        /* Manual mode: classic latch — too-close trips fan kill, latched
+         *               until distance clears the leave threshold.
+         * Tracking mode: head is intentionally near the iron, so TOF
+         *               reads short distance forever. Treat paused as a
+         *               2 s momentary flash on entry; voice + paused:1
+         *               fires once, then paused:0 follows so the GUI
+         *               dot returns to Auto-track. Re-arms only after
+         *               distance gets above the leave threshold so we
+         *               don't spam on a continuous close reading. */
+        bool tracking_active = task_servo_ctrl_get_tracking();
+        static TickType_t s_track_warn_ts = 0u;
+        static bool s_track_warn_armed = true;
+
+        if (tracking_active)
         {
-            too_close = true;
-            task_print_info("paused:1");
-            task_fan_set_duty(0);
-            /* Pause IR-tracker too: the TOF sits next to the fan, so any
-             * pan/tilt motion swings TOF off-target and the safety logic
-             * loses its read. Stop motion until the obstruction clears. */
-            task_servo_ctrl_set_tracking(false);
-            (void)task_audio_say("too_close");
+            TickType_t now = xTaskGetTickCount();
+            bool below_enter = valid_reading &&
+                               ((uint16_t)distance_mm <= TOF_NEAR_ENTER_MM);
+            bool above_leave = valid_reading &&
+                               ((uint16_t)distance_mm >= TOF_NEAR_LEAVE_MM);
+
+            if (s_track_warn_armed && below_enter)
+            {
+                s_track_warn_armed = false;
+                s_track_warn_ts = now;
+                task_print_info("paused:1");
+                (void)task_audio_say("too_close");
+                /* Freeze the tracker so it stops chasing the too-close
+                 * object. Stays frozen until distance clears the leave
+                 * threshold (handled in the above_leave branch). */
+                task_servo_ctrl_suppress_tracking(true);
+            }
+            if (!s_track_warn_armed && (s_track_warn_ts != 0u) &&
+                ((now - s_track_warn_ts) >= pdMS_TO_TICKS(2000u)))
+            {
+                s_track_warn_ts = 0u;
+                task_print_info("paused:0");
+            }
+            if (!s_track_warn_armed && above_leave)
+            {
+                s_track_warn_armed = true;
+                /* Distance is back to safe — release the tracker. */
+                task_servo_ctrl_suppress_tracking(false);
+            }
+            /* Manual-mode latch is irrelevant while tracking; if it was
+             * left set from a previous mode switch, clear it without
+             * touching the fan. */
+            if (too_close)
+            {
+                too_close = false;
+            }
         }
-        else if (too_close && valid_reading &&
-                 ((uint16_t)distance_mm >= TOF_NEAR_LEAVE_MM))
+        else
         {
-            too_close = false;
-            task_print_info("paused:0");
-            task_fan_set_duty(TOF_FAN_RESUME_DUTY);
-            task_servo_ctrl_set_tracking(true);
+            /* Reset tracking-mode warn state so the next entry into
+             * tracking mode starts fresh, including any suppression
+             * we asserted on the tracker. */
+            s_track_warn_armed = true;
+            s_track_warn_ts = 0u;
+            task_servo_ctrl_suppress_tracking(false);
+
+            if (!too_close && valid_reading &&
+                ((uint16_t)distance_mm <= TOF_NEAR_ENTER_MM))
+            {
+                too_close = true;
+                task_print_info("paused:1");
+                task_fan_set_duty(0);
+                (void)task_audio_say("too_close");
+            }
+            else if (too_close && valid_reading &&
+                     ((uint16_t)distance_mm >= TOF_NEAR_LEAVE_MM))
+            {
+                too_close = false;
+                task_print_info("paused:0");
+                task_fan_set_duty(TOF_FAN_RESUME_DUTY);
+            }
         }
 
         status = VL53LX_ClearInterruptAndStartMeasurement(&tof_dev);

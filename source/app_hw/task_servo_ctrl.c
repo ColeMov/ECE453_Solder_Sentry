@@ -1,5 +1,11 @@
 #include "task_servo_ctrl.h"
 #include "task_ir_sensor.h"
+#include "task_fan.h"
+
+/* Auto-fan: kill the fan after this long without seeing iron-class
+ * heat through the tracker. Iron detected → restore to full duty. */
+#define FAN_AUTO_OFF_TIMEOUT_MS    (3000u)
+#define FAN_AUTO_ON_DUTY           (100u)
 
 /*******************************************************************************/
 /* Function Declarations                                                       */
@@ -38,6 +44,12 @@ static bool parse_axis_param(const char *pcCommandString, UBaseType_t param_inde
 static bool servo_set_pulse_us(cyhal_pwm_t *pwm_obj, uint32_t pulse_us);
 static bool servo_run_sweep(const servo_ctrl_message_t *msg);
 static void servo_track_hottest_ir_point(void);
+static void servo_fan_gate_tick(void);
+
+/* Updated whenever the tracker confirms iron-class heat in frame.
+ * 0 = never seen yet (don't auto-cut on boot until we've had a
+ * chance to look). */
+static volatile TickType_t g_last_iron_seen_ts = 0u;
 
 /*******************************************************************************/
 /* Global Variables                                                            */
@@ -52,6 +64,10 @@ static uint16_t g_tilt_deg = SERVO_DEFAULT_TILT_DEG;
 static uint16_t g_pan_target_deg = SERVO_DEFAULT_PAN_DEG;
 static uint16_t g_tilt_target_deg = SERVO_DEFAULT_TILT_DEG;
 static bool g_servo_track_enabled = SERVO_TRACK_IR_ENABLE;
+/* Set by task_tof when a too-close trip happens — freezes the tracker
+ * (no servo motion) without changing the user-facing tracking state.
+ * Cleared when distance crosses back above the leave threshold. */
+static volatile bool g_servo_track_suppressed = false;
 
 static void servo_ramp_tick(void);
 
@@ -327,7 +343,7 @@ static void servo_track_hottest_ir_point(void)
     int32_t next_tilt;
     bool changed = false;
 
-    if (!g_servo_track_enabled)
+    if (!g_servo_track_enabled || g_servo_track_suppressed)
     {
         return;
     }
@@ -355,6 +371,15 @@ static void servo_track_hottest_ir_point(void)
     {
         return;
     }
+
+    /* Iron-presence stamp uses ONLY the absolute-temp gate. When the
+     * iron sits close to the sensor it warms every pixel — hot - mean
+     * collapses below SERVO_TRACK_MIN_CONTRAST_C, the tracker bails
+     * before stamping, and the fan-gate 3s-times out exactly when
+     * the user is actively soldering. Steering still demands contrast
+     * (next gate); fan presence does not. */
+    g_last_iron_seen_ts = xTaskGetTickCount();
+
     if ((hot_temp_c - mean_temp_c) < SERVO_TRACK_MIN_CONTRAST_C)
     {
         return;
@@ -490,11 +515,11 @@ static void task_servo_ctrl(void *param)
             }
 
             /* Manual set-angle always wins: disable auto-tracking so the
-               tracker does not immediately overwrite the commanded angle. */
+               tracker does not immediately overwrite the commanded angle.
+               task_servo_ctrl_set_tracking emits track:0 for the GUI. */
             if ((msg.set_pan || msg.set_tilt) && g_servo_track_enabled)
             {
-                g_servo_track_enabled = false;
-                task_print_info("Auto-tracking disabled (manual servo command)");
+                task_servo_ctrl_set_tracking(false);
             }
 
             if (msg.set_pan)
@@ -510,7 +535,35 @@ static void task_servo_ctrl(void *param)
 
         /* Tracker self-rate-limits internally to SERVO_TRACK_PERIOD_MS. */
         servo_track_hottest_ir_point();
+        servo_fan_gate_tick();
         servo_ramp_tick();
+    }
+}
+
+/* Auto-fan: only intervenes while auto-tracking is on. Manual
+ * mode (joystick) leaves fan duty alone — the user is in control.
+ * On boot or after a long no-iron stretch we cut the fan; the
+ * moment the tracker confirms iron we restore full duty. */
+static void servo_fan_gate_tick(void)
+{
+    if (!g_servo_track_enabled)
+    {
+        return;
+    }
+
+    TickType_t now = xTaskGetTickCount();
+    uint8_t fan_now = task_fan_get_duty();
+    bool iron_recent = (g_last_iron_seen_ts != 0u) &&
+                       ((now - g_last_iron_seen_ts) <
+                        pdMS_TO_TICKS(FAN_AUTO_OFF_TIMEOUT_MS));
+
+    if (iron_recent && fan_now == 0u)
+    {
+        task_fan_set_duty(FAN_AUTO_ON_DUTY);
+    }
+    else if (!iron_recent && fan_now != 0u)
+    {
+        task_fan_set_duty(0u);
     }
 }
 
@@ -763,7 +816,7 @@ static BaseType_t cli_handler_servo_track(
     if ((strcmp(parameter_buffer, "on") == 0) || (strcmp(parameter_buffer, "1") == 0) ||
         (strcmp(parameter_buffer, "enable") == 0))
     {
-        g_servo_track_enabled = true;
+        task_servo_ctrl_set_tracking(true);
         snprintf(pcWriteBuffer, xWriteBufferLen, "Auto-tracking enabled\r\n");
         return pdFALSE;
     }
@@ -771,7 +824,7 @@ static BaseType_t cli_handler_servo_track(
     if ((strcmp(parameter_buffer, "off") == 0) || (strcmp(parameter_buffer, "0") == 0) ||
         (strcmp(parameter_buffer, "disable") == 0))
     {
-        g_servo_track_enabled = false;
+        task_servo_ctrl_set_tracking(false);
         snprintf(pcWriteBuffer, xWriteBufferLen, "Auto-tracking disabled\r\n");
         return pdFALSE;
     }
@@ -897,4 +950,44 @@ void task_servo_ctrl_set_angles(uint16_t pan_deg, uint16_t tilt_deg)
     msg.pan_deg  = pan_deg;
     msg.tilt_deg = tilt_deg;
     (void)xQueueSendToBack(q_servo_ctrl, &msg, 0u);
+}
+
+bool task_servo_ctrl_get_tracking(void)
+{
+    return g_servo_track_enabled;
+}
+
+void task_servo_ctrl_set_tracking(bool enable)
+{
+    if (g_servo_track_enabled == enable)
+    {
+        return;
+    }
+    /* When turning tracking back ON, drain any queued manual servo
+     * commands. Otherwise a still-pending drag cmd from BLE arrives
+     * AFTER set_tracking(true), trips the manual-override path, and
+     * flips tracking right back off — the exact race the desktop
+     * "release sends track:1" path was meant to avoid. */
+    if (enable && (q_servo_ctrl != NULL))
+    {
+        servo_ctrl_message_t drain;
+        while (xQueueReceive(q_servo_ctrl, &drain, 0u) == pdPASS) { }
+    }
+    g_servo_track_enabled = enable;
+    /* Any explicit user-driven mode change clears a stuck TOF
+     * suppression so a leftover too-close trip doesn't keep the
+     * tracker frozen when the user re-engages auto-track. */
+    g_servo_track_suppressed = false;
+    /* Parseable telemetry token for desktop GUI tracking dot. */
+    task_print_info("track:%u", enable ? 1u : 0u);
+}
+
+void task_servo_ctrl_suppress_tracking(bool suppress)
+{
+    if (g_servo_track_suppressed == suppress)
+    {
+        return;
+    }
+    g_servo_track_suppressed = suppress;
+    task_print_info("track-suppress:%u", suppress ? 1u : 0u);
 }

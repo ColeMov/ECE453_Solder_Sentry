@@ -54,6 +54,13 @@ class IRFrameReceiver:
         if not data:
             return
 
+        # Diagnostic: dump every notification packet so we can tell
+        # whether anything is arriving from the board at all.
+        try:
+            print(f"[notif {len(data)}B] {bytes(data)!r}", flush=True)
+        except Exception:
+            pass
+
         marker = data[0]
 
         if marker == FRAME_MARKER:
@@ -97,12 +104,22 @@ class IRFrameReceiver:
     def _dispatch_line(self, line: bytes):
         if not line:
             return
+        # Diagnostic: dump every assembled line so we can tell whether
+        # BLE data is arriving at all, vs arriving but failing the
+        # telemetry regex.
+        try:
+            print(f"[line] {line!r}", flush=True)
+        except Exception:
+            pass
         # Telemetry tokens may appear anywhere in the line (the print
         # framework prefixes things like "[Info] : ToF :"). Find them.
         m = self._TELEM_RE.search(line)
         if m:
             try:
-                self._on_telemetry(m.group(1).decode("ascii"), int(m.group(2)))
+                key = m.group(1).decode("ascii")
+                value = int(m.group(2))
+                print(f"[telemetry] {key}={value}", flush=True)
+                self._on_telemetry(key, value)
                 return
             except ValueError:
                 pass
@@ -145,10 +162,20 @@ class SolderSentryClient:
         asyncio.run_coroutine_threadsafe(
             self.send_servo(pan_deg, tilt_deg), self._loop)
 
-    def send_text_threadsafe(self, text: str):
+    async def send_track(self, enable: bool):
+        if self._client is None or not self._client.is_connected:
+            return
+        msg = f"track:{1 if enable else 0}\n".encode("ascii")
+        try:
+            await self._client.write_gatt_char(NUS_RX_UUID, msg, response=False)
+        except Exception:
+            pass
+
+    def send_track_threadsafe(self, enable: bool):
         if self._loop is None:
             return
-        asyncio.run_coroutine_threadsafe(self.send_text(text), self._loop)
+        asyncio.run_coroutine_threadsafe(
+            self.send_track(enable), self._loop)
 
 
 async def _find_device():

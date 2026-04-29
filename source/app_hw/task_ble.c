@@ -11,6 +11,7 @@
 #include "task_ir_sensor.h"
 #include "task_audio.h"
 #include "task_servo_ctrl.h"
+#include "task_fan.h"
 #include "cy_ble_clk.h"
 #include "cy_sysint.h"
 #include <string.h>
@@ -63,52 +64,6 @@ static void bless_interrupt_isr(void)
 #define NUS_TX_CHAR() (NUS_SERV().customServInfo[BLE_NUS_TX_CHAR_INDEX])
 #define NUS_RX_CHAR() (NUS_SERV().customServInfo[BLE_NUS_RX_CHAR_INDEX])
 
-/* Parse one line of inbound text from the desktop GUI:
- *     "track:0" / "track:1"  -> enable/disable IR auto-tracking
- *     "servo:<pan>,<tilt>"   -> set absolute servo angles (degrees, 0..180)
- * Anything else is logged. */
-static void ble_handle_rx_line(const uint8_t *buf, uint16_t len)
-{
-    /* Copy into a NUL-terminated stack buffer for sscanf-friendliness. */
-    char line[80];
-    if (len == 0u) return;
-    if (len >= sizeof(line)) len = sizeof(line) - 1;
-    memcpy(line, buf, len);
-    line[len] = '\0';
-
-    /* Trim trailing CR/LF */
-    while (len > 0 && (line[len-1] == '\r' || line[len-1] == '\n'))
-    {
-        line[--len] = '\0';
-    }
-
-    if (strncmp(line, "track:", 6) == 0)
-    {
-        int v = atoi(line + 6);
-        task_servo_ctrl_set_tracking(v != 0);
-        return;
-    }
-
-    if (strncmp(line, "servo:", 6) == 0)
-    {
-        int pan = -1, tilt = -1;
-        char *comma = strchr(line + 6, ',');
-        if (comma != NULL)
-        {
-            *comma = '\0';
-            pan  = atoi(line + 6);
-            tilt = atoi(comma + 1);
-        }
-        if (pan >= 0 && pan <= 180 && tilt >= 0 && tilt <= 180)
-        {
-            task_servo_ctrl_set_angles((uint16_t)pan, (uint16_t)tilt);
-        }
-        return;
-    }
-
-    task_print_info("BLE RX: '%s'", line);
-}
-
 QueueHandle_t q_ble_tx = NULL;
 volatile uint32_t g_ble_diag_state = 0u;
 
@@ -124,6 +79,8 @@ extern cy_stc_ble_stack_params_t stackParam;
 static void task_ble(void *param);
 static void ble_event_handler(uint32_t eventCode, void *eventParam);
 static void ble_send_notification(const char *str);
+static cy_en_ble_api_result_t ble_tx_notify_raw(
+    cy_ble_gatt_db_attr_handle_t hdl, const uint8_t *data, uint16_t len);
 static void ble_start_advertising_fast(void);
 
 static void ble_start_advertising_fast(void)
@@ -179,6 +136,64 @@ void task_ble_force_pairing_mode(void)
     if (er != CY_BLE_SUCCESS)
     {
         task_print_error("BLE: re-enable failed (0x%04X)", (unsigned)er);
+    }
+}
+
+/* Parse a single command frame written to the NUS RX characteristic.
+ * Currently only "servo:<pan>,<tilt>\n" (desktop joystick). Bytes are
+ * NOT null-terminated by the BLE stack; copy to a local buffer first. */
+static void ble_handle_rx_payload(const uint8_t *bytes, uint16_t len)
+{
+    if ((bytes == NULL) || (len == 0u))
+    {
+        return;
+    }
+
+    char buf[64];
+    uint16_t copy = (len < (sizeof(buf) - 1u)) ? len : (uint16_t)(sizeof(buf) - 1u);
+    memcpy(buf, bytes, copy);
+    buf[copy] = '\0';
+
+    /* Strip trailing CR/LF that the desktop appends. */
+    while ((copy > 0u) && ((buf[copy - 1u] == '\r') || (buf[copy - 1u] == '\n')))
+    {
+        buf[--copy] = '\0';
+    }
+
+    if (strncmp(buf, "servo:", 6) == 0)
+    {
+        char *comma = strchr(buf + 6, ',');
+        if (comma == NULL)
+        {
+            task_print_warning("BLE RX: bad servo payload '%s'", buf);
+            return;
+        }
+        *comma = '\0';
+        long pan = strtol(buf + 6, NULL, 10);
+        long tilt = strtol(comma + 1, NULL, 10);
+        if (pan < 0) pan = 0; else if (pan > 180) pan = 180;
+        if (tilt < 0) tilt = 0; else if (tilt > 180) tilt = 180;
+
+        if (q_servo_ctrl != NULL)
+        {
+            servo_ctrl_message_t cmd = {0};
+            cmd.cmd = SERVO_CTRL_CMD_SET_ANGLE;
+            cmd.set_pan = true;
+            cmd.set_tilt = true;
+            cmd.pan_deg = (uint16_t)pan;
+            cmd.tilt_deg = (uint16_t)tilt;
+            (void)xQueueSend(q_servo_ctrl, &cmd, 0);
+        }
+    }
+    else if (strncmp(buf, "track:", 6) == 0)
+    {
+        /* Desktop joystick sends track:0 on grab, track:1 on release. */
+        bool enable = (buf[6] == '1');
+        task_servo_ctrl_set_tracking(enable);
+    }
+    else
+    {
+        task_print_info("BLE RX: unhandled '%s'", buf);
     }
 }
 
@@ -266,7 +281,6 @@ static void ble_event_handler(uint32_t eventCode, void *eventParam)
 
             (void)Cy_BLE_GATTS_WriteAttributeValuePeer(&wr->connHandle, &wr->handleValPair);
 
-            /* CCCD of the TX characteristic controls notifications */
             cy_ble_gatt_db_attr_handle_t cccdHandle = NUS_TX_CHAR().customServCharDesc[0];
             cy_ble_gatt_db_attr_handle_t rxHandle   = NUS_RX_CHAR().customServCharHandle;
             if (wr->handleValPair.attrHandle == cccdHandle)
@@ -280,6 +294,20 @@ static void ble_event_handler(uint32_t eventCode, void *eventParam)
                 notifications_enabled = (cccd == CY_BLE_GATT_CLI_CNFG_NOTIFICATION);
                 task_print_info("BLE: notifications %s",
                                 notifications_enabled ? "enabled" : "disabled");
+                /* Push current fan + tracking snapshot so the desktop GUI
+                 * can sync its widgets immediately on connect — TOF/fan
+                 * pause/track changes are otherwise event-driven only. */
+                if (notifications_enabled)
+                {
+                    task_print_info("fan:%u", (unsigned)task_fan_get_duty());
+                    task_print_info("track:%u",
+                                    task_servo_ctrl_get_tracking() ? 1u : 0u);
+                }
+            }
+            else if (wr->handleValPair.attrHandle == rxHandle)
+            {
+                ble_handle_rx_payload(wr->handleValPair.value.val,
+                                      wr->handleValPair.value.len);
             }
             else if (wr->handleValPair.attrHandle == rxHandle)
             {
@@ -291,6 +319,24 @@ static void ble_event_handler(uint32_t eventCode, void *eventParam)
             break;
         }
 
+        /* Write-without-response (used by desktop joystick to avoid the
+         * round-trip ack). Same payload format as WRITE_REQ but no Rsp. */
+        case CY_BLE_EVT_GATTS_WRITE_CMD_REQ:
+        {
+            cy_stc_ble_gatts_write_cmd_req_param_t *wr =
+                (cy_stc_ble_gatts_write_cmd_req_param_t *)eventParam;
+
+            (void)Cy_BLE_GATTS_WriteAttributeValuePeer(&wr->connHandle, &wr->handleValPair);
+
+            cy_ble_gatt_db_attr_handle_t rxHandle = NUS_RX_CHAR().customServCharHandle;
+            if (wr->handleValPair.attrHandle == rxHandle)
+            {
+                ble_handle_rx_payload(wr->handleValPair.value.val,
+                                      wr->handleValPair.value.len);
+            }
+            break;
+        }
+
         default:
             break;
     }
@@ -298,7 +344,12 @@ static void ble_event_handler(uint32_t eventCode, void *eventParam)
 
 static void ble_send_notification(const char *str)
 {
-    if ((str == NULL) || !ble_connected || !notifications_enabled)
+    /* Don't gate on notifications_enabled: the CCCD WRITE_REQ event
+     * doesn't always fire / match the expected attrHandle on this BSP,
+     * yet IR frames go through fine because they share the same TX
+     * notification path. If the central isn't actually subscribed the
+     * stack will refuse the notify itself. */
+    if ((str == NULL) || !ble_connected)
     {
         return;
     }
@@ -307,6 +358,13 @@ static void ble_send_notification(const char *str)
     size_t total = strlen(str);
     size_t offset = 0u;
 
+    /* Use Cy_BLE_GATTS_Notification (raw notify, no GATT-DB write back)
+     * for the same reason the IR pump uses ble_tx_notify_raw: the BT
+     * Configurator-generated DB has the TX char storage sized at 0
+     * bytes, so Cy_BLE_GATTS_SendNotification fails with
+     * INVALID_OPERATION on the first chunk and the message is dropped.
+     * That bug was the reason every fan: / track: / tof: token sent
+     * over BLE never reached the desktop GUI. */
     while (offset < total)
     {
         uint8_t chunk[BLE_NOTIF_MAX_LEN];
@@ -317,13 +375,12 @@ static void ble_send_notification(const char *str)
         }
         memcpy(chunk, str + offset, len);
 
-        cy_stc_ble_gatt_handle_value_pair_t hvp = {
-            .attrHandle = txHandle,
-            .value = { .val = chunk, .len = len }
-        };
-
-        if (Cy_BLE_GATTS_SendNotification(&ble_conn_handle, &hvp) != CY_BLE_SUCCESS)
+        if (ble_tx_notify_raw(txHandle, chunk, len) != CY_BLE_SUCCESS)
         {
+            /* Stack busy / no resources — bail and let the next loop
+             * iter drain another queue item. The leading '\n' that the
+             * console writer prepends to the next msg will flush any
+             * partial line stuck on the desktop. */
             break;
         }
         offset += len;
@@ -507,6 +564,15 @@ static void task_ble(void *param)
                 dbg_ir_queue_hits = 0u;
                 dbg_frames_attempted = 0u;
                 dbg_frames_ok = 0u;
+
+                /* Heartbeat snapshot of slow-changing state so the GUI
+                 * always converges. Don't gate on notifications_enabled —
+                 * that flag tracks the CCCD-write event which isn't
+                 * reliable on this BSP; just trust ble_connected. */
+                task_print_info("fan:%u",
+                                (unsigned)task_fan_get_duty());
+                task_print_info("track:%u",
+                                task_servo_ctrl_get_tracking() ? 1u : 0u);
             }
         }
 
@@ -599,7 +665,7 @@ void task_ble_init(void)
                                      "BLE",
                                      6 * configMINIMAL_STACK_SIZE,
                                      NULL,
-                                     configMAX_PRIORITIES - 7,
+                                     configMAX_PRIORITIES - 2,
                                      NULL);
     if (task_ok != pdPASS)
     {
