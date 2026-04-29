@@ -104,4 +104,11 @@ void task_servo_ctrl_init(void);
 bool task_servo_ctrl_get_tracking(void);
 void task_servo_ctrl_set_tracking(bool enable);
 
+/* Temporarily freeze the tracker without changing the user-facing
+ * tracking-enabled state. Used by task_tof to stop the tracker chasing
+ * a too-close object while a TOF safety trip is active. The GUI dot
+ * continues to show Auto-track (or PAUSED while paused:1 is on); the
+ * servos just don't move until suppress(false) is called. */
+void task_servo_ctrl_suppress_tracking(bool suppress);
+
 #endif

@@ -64,6 +64,10 @@ static uint16_t g_tilt_deg = SERVO_DEFAULT_TILT_DEG;
 static uint16_t g_pan_target_deg = SERVO_DEFAULT_PAN_DEG;
 static uint16_t g_tilt_target_deg = SERVO_DEFAULT_TILT_DEG;
 static bool g_servo_track_enabled = SERVO_TRACK_IR_ENABLE;
+/* Set by task_tof when a too-close trip happens — freezes the tracker
+ * (no servo motion) without changing the user-facing tracking state.
+ * Cleared when distance crosses back above the leave threshold. */
+static volatile bool g_servo_track_suppressed = false;
 
 static void servo_ramp_tick(void);
 
@@ -339,7 +343,7 @@ static void servo_track_hottest_ir_point(void)
     int32_t next_tilt;
     bool changed = false;
 
-    if (!g_servo_track_enabled)
+    if (!g_servo_track_enabled || g_servo_track_suppressed)
     {
         return;
     }
@@ -941,6 +945,20 @@ void task_servo_ctrl_set_tracking(bool enable)
         while (xQueueReceive(q_servo_ctrl, &drain, 0u) == pdPASS) { }
     }
     g_servo_track_enabled = enable;
+    /* Any explicit user-driven mode change clears a stuck TOF
+     * suppression so a leftover too-close trip doesn't keep the
+     * tracker frozen when the user re-engages auto-track. */
+    g_servo_track_suppressed = false;
     /* Parseable telemetry token for desktop GUI tracking dot. */
     task_print_info("track:%u", enable ? 1u : 0u);
+}
+
+void task_servo_ctrl_suppress_tracking(bool suppress)
+{
+    if (g_servo_track_suppressed == suppress)
+    {
+        return;
+    }
+    g_servo_track_suppressed = suppress;
+    task_print_info("track-suppress:%u", suppress ? 1u : 0u);
 }

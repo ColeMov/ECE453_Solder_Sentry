@@ -286,6 +286,10 @@ static void task_tof(void *param)
                 s_track_warn_ts = now;
                 task_print_info("paused:1");
                 (void)task_audio_say("too_close");
+                /* Freeze the tracker so it stops chasing the too-close
+                 * object. Stays frozen until distance clears the leave
+                 * threshold (handled in the above_leave branch). */
+                task_servo_ctrl_suppress_tracking(true);
             }
             if (!s_track_warn_armed && (s_track_warn_ts != 0u) &&
                 ((now - s_track_warn_ts) >= pdMS_TO_TICKS(2000u)))
@@ -296,6 +300,8 @@ static void task_tof(void *param)
             if (!s_track_warn_armed && above_leave)
             {
                 s_track_warn_armed = true;
+                /* Distance is back to safe — release the tracker. */
+                task_servo_ctrl_suppress_tracking(false);
             }
             /* Manual-mode latch is irrelevant while tracking; if it was
              * left set from a previous mode switch, clear it without
@@ -308,9 +314,11 @@ static void task_tof(void *param)
         else
         {
             /* Reset tracking-mode warn state so the next entry into
-             * tracking mode starts fresh. */
+             * tracking mode starts fresh, including any suppression
+             * we asserted on the tracker. */
             s_track_warn_armed = true;
             s_track_warn_ts = 0u;
+            task_servo_ctrl_suppress_tracking(false);
 
             if (!too_close && valid_reading &&
                 ((uint16_t)distance_mm <= TOF_NEAR_ENTER_MM))
