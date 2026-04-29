@@ -259,34 +259,72 @@ static void task_tof(void *param)
                              (range_status == VL53LX_RANGESTATUS_RANGE_VALID) &&
                              (distance_mm > 0);
 
-        /* Too-close detection always fires the warning (voice prompt +
-         * paused:1 telemetry). Only the fan kill is suppressed while
-         * auto-tracking is on — otherwise the tracker locks onto an
-         * iron near the sensor, TOF trips every frame, and the fan
-         * gets averaged low fighting the tracker's iron-present gate.
-         * Warning still useful in tracking mode: tells the user a hand
-         * is in the danger zone even if the tracker is keeping the fan
-         * running for active soldering. */
+        /* Manual mode: classic latch — too-close trips fan kill, latched
+         *               until distance clears the leave threshold.
+         * Tracking mode: head is intentionally near the iron, so TOF
+         *               reads short distance forever. Treat paused as a
+         *               2 s momentary flash on entry; voice + paused:1
+         *               fires once, then paused:0 follows so the GUI
+         *               dot returns to Auto-track. Re-arms only after
+         *               distance gets above the leave threshold so we
+         *               don't spam on a continuous close reading. */
         bool tracking_active = task_servo_ctrl_get_tracking();
+        static TickType_t s_track_warn_ts = 0u;
+        static bool s_track_warn_armed = true;
 
-        if (!too_close && valid_reading &&
-            ((uint16_t)distance_mm <= TOF_NEAR_ENTER_MM))
+        if (tracking_active)
         {
-            too_close = true;
-            task_print_info("paused:1");
-            (void)task_audio_say("too_close");
-            if (!tracking_active)
+            TickType_t now = xTaskGetTickCount();
+            bool below_enter = valid_reading &&
+                               ((uint16_t)distance_mm <= TOF_NEAR_ENTER_MM);
+            bool above_leave = valid_reading &&
+                               ((uint16_t)distance_mm >= TOF_NEAR_LEAVE_MM);
+
+            if (s_track_warn_armed && below_enter)
             {
-                task_fan_set_duty(0);
+                s_track_warn_armed = false;
+                s_track_warn_ts = now;
+                task_print_info("paused:1");
+                (void)task_audio_say("too_close");
+            }
+            if (!s_track_warn_armed && (s_track_warn_ts != 0u) &&
+                ((now - s_track_warn_ts) >= pdMS_TO_TICKS(2000u)))
+            {
+                s_track_warn_ts = 0u;
+                task_print_info("paused:0");
+            }
+            if (!s_track_warn_armed && above_leave)
+            {
+                s_track_warn_armed = true;
+            }
+            /* Manual-mode latch is irrelevant while tracking; if it was
+             * left set from a previous mode switch, clear it without
+             * touching the fan. */
+            if (too_close)
+            {
+                too_close = false;
             }
         }
-        else if (too_close && valid_reading &&
-                 ((uint16_t)distance_mm >= TOF_NEAR_LEAVE_MM))
+        else
         {
-            too_close = false;
-            task_print_info("paused:0");
-            if (!tracking_active)
+            /* Reset tracking-mode warn state so the next entry into
+             * tracking mode starts fresh. */
+            s_track_warn_armed = true;
+            s_track_warn_ts = 0u;
+
+            if (!too_close && valid_reading &&
+                ((uint16_t)distance_mm <= TOF_NEAR_ENTER_MM))
             {
+                too_close = true;
+                task_print_info("paused:1");
+                task_fan_set_duty(0);
+                (void)task_audio_say("too_close");
+            }
+            else if (too_close && valid_reading &&
+                     ((uint16_t)distance_mm >= TOF_NEAR_LEAVE_MM))
+            {
+                too_close = false;
+                task_print_info("paused:0");
                 task_fan_set_duty(TOF_FAN_RESUME_DUTY);
             }
         }
