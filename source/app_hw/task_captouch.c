@@ -19,6 +19,7 @@
 #include "ece453_pins.h"
 
 #include "cyhal_gpio.h"
+#include "cyhal_system.h"
 
 #define CAPTOUCH_POLL_MS         (50u)
 #define CAPTOUCH_DEBOUNCE_COUNT  (2u)  /* Consecutive same readings before accepting */
@@ -27,15 +28,38 @@
 /* Press classification */
 #define CAPTOUCH_SHORT_TAP_MAX_MS  (600u)
 #define CAPTOUCH_LONG_HOLD_MIN_MS  (1500u)
+/* Two short taps within this window = soft-reset the PSoC. Equivalent
+ * to pressing the kit's reset button — used for recovery without
+ * having to physically reach the board. */
+#define CAPTOUCH_DOUBLE_TAP_MS     (500u)
 
 static void captouch_on_short_press(uint32_t held_ms);
 static void captouch_on_long_press(uint32_t held_ms);
 
 static void captouch_on_short_press(uint32_t held_ms)
 {
-    /* Short tap toggles fan + IR auto-tracking together. Pad is the
-     * single user-accessible control on the unit, so both should follow
-     * the same on/off state — no point tracking with the fan dead. */
+    static uint32_t last_tap_ms = 0u;
+    uint32_t now = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
+
+    /* Double-tap = soft reset. Detect before the single-tap action
+     * so the second quick tap doesn't also toggle fan/track first. */
+    if ((last_tap_ms != 0u) && ((now - last_tap_ms) <= CAPTOUCH_DOUBLE_TAP_MS))
+    {
+        last_tap_ms = 0u;
+        task_print_warning("CapTouch: double-tap → SOFT RESET in 100 ms");
+        /* Brief delay so the warning makes it onto UART/BLE before we
+         * yank the world out from under everything. */
+        cyhal_system_delay_ms(100u);
+        NVIC_SystemReset();
+        /* Not reached. */
+        return;
+    }
+    last_tap_ms = now;
+
+    /* Single short tap toggles fan + IR auto-tracking together. Pad is
+     * the only user-accessible control on the unit, so both should
+     * follow the same on/off state — no point tracking with the fan
+     * dead. */
     bool turning_on = (task_fan_get_duty() == 0u);
     task_print_info("CapTouch: short press (%lu ms) — fan/track %s",
                     (unsigned long)held_ms, turning_on ? "ON" : "OFF");
