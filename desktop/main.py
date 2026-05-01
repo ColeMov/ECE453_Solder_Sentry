@@ -384,6 +384,11 @@ class SolderSentryApp(ctk.CTk):
         ctk.set_default_color_theme("blue")
 
         self._stop_event_async: Optional[asyncio.Event] = None
+        # Tk after()-id for the auto-clear watchdog. Firmware emits
+        # paused:0 ~2 s after a too-close trip; if that single BLE
+        # notify is dropped the dot stays red. Watchdog flips it back
+        # to Auto-track / Manual after 2 s if no fresh paused:1 fired.
+        self._paused_clear_id: Optional[str] = None
         self._client = SolderSentryClient(
             on_frame=self._on_frame_thread,
             on_telemetry=self._on_telemetry_thread,
@@ -536,6 +541,14 @@ class SolderSentryApp(ctk.CTk):
         enable = self._track_switch.get() == 1
         self._client.send_track_threadsafe(enable)
 
+    def _auto_clear_paused(self):
+        # Watchdog fired — assume paused:0 was dropped. Force GUI back
+        # to Auto-track / Manual so the dot doesn't get stuck red.
+        self._paused_clear_id = None
+        if _state.paused:
+            _state.paused = False
+            self._update_mode_dot()
+
     def _update_mode_dot(self):
         # Priority: PAUSED > Auto-track > Manual.
         if _state.paused:
@@ -571,6 +584,15 @@ class SolderSentryApp(ctk.CTk):
                     elif key == "paused":
                         _state.paused = bool(value)
                         self._update_mode_dot()
+                        # Watchdog: every paused:1 (re)schedules a 2 s
+                        # auto-clear; paused:0 cancels the pending clear.
+                        # Protects against dropped paused:0 notifications.
+                        if self._paused_clear_id is not None:
+                            self.after_cancel(self._paused_clear_id)
+                            self._paused_clear_id = None
+                        if _state.paused:
+                            self._paused_clear_id = self.after(
+                                2000, self._auto_clear_paused)
                     elif key == "track":
                         _state.tracking = bool(value)
                         self._update_mode_dot()
